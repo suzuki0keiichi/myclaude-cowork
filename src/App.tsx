@@ -8,9 +8,10 @@ import { SetupScreen } from "./components/SetupScreen";
 import { FileBrowser } from "./components/FileBrowser";
 import { TodoPanel } from "./components/TodoPanel";
 import { SkillManager } from "./components/SkillManager";
+import { SettingsPanel } from "./components/SettingsPanel";
 import "./App.css";
 
-type SidebarTab = "files" | "skills" | "todos";
+type SidebarTab = "files" | "skills" | "todos" | "settings";
 
 function App() {
   const {
@@ -64,6 +65,12 @@ function App() {
           >
             ☑ TODO
           </button>
+          <button
+            className={`sidebar-tab ${sidebarTab === "settings" ? "active" : ""}`}
+            onClick={() => setSidebarTab("settings")}
+          >
+            設定
+          </button>
         </div>
 
         {/* Tab content */}
@@ -80,6 +87,7 @@ function App() {
             <SkillManager onExecuteSkill={sendMessage} />
           )}
           {sidebarTab === "todos" && <TodoPanel />}
+          {sidebarTab === "settings" && <SettingsPanel />}
         </div>
 
         <div className="sidebar-footer">

@@ -1,12 +1,16 @@
 mod claude;
 mod files;
+mod gdrive;
 mod skills;
+mod slack;
 mod todos;
 mod translator;
 
 use claude::{ChatMessage, ClaudeManager};
 use files::FileEntry;
+use gdrive::{DriveFile, GDriveClient, GDriveConfig};
 use skills::{Skill, SkillStore};
+use slack::{SlackClient, SlackConfig, SlackListItem};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,6 +20,8 @@ use todos::{TodoItem, TodoManager};
 type ClaudeState = Arc<ClaudeManager>;
 type SkillState = Arc<SkillStore>;
 type TodoState = Arc<TodoManager>;
+type SlackState = Arc<SlackClient>;
+type GDriveState = Arc<GDriveClient>;
 
 // ── Claude commands ──
 
@@ -135,6 +141,99 @@ async fn remove_todo(state: State<'_, TodoState>, id: String) -> Result<bool, St
     state.remove(&id).await
 }
 
+// ── Slack commands ──
+
+#[tauri::command]
+async fn slack_is_configured(state: State<'_, SlackState>) -> Result<bool, String> {
+    Ok(state.is_configured().await)
+}
+
+#[tauri::command]
+async fn slack_get_config(state: State<'_, SlackState>) -> Result<Option<SlackConfig>, String> {
+    Ok(state.get_config().await)
+}
+
+#[tauri::command]
+async fn slack_save_config(
+    state: State<'_, SlackState>,
+    config: SlackConfig,
+) -> Result<(), String> {
+    state.save_config(config).await
+}
+
+#[tauri::command]
+async fn slack_list_items(
+    state: State<'_, SlackState>,
+    list_id: String,
+) -> Result<Vec<SlackListItem>, String> {
+    state.list_items(&list_id).await
+}
+
+#[tauri::command]
+async fn slack_create_item(
+    state: State<'_, SlackState>,
+    list_id: String,
+    title: String,
+) -> Result<SlackListItem, String> {
+    state.create_item(&list_id, &title).await
+}
+
+// ── Google Drive commands ──
+
+#[tauri::command]
+async fn gdrive_is_configured(state: State<'_, GDriveState>) -> Result<bool, String> {
+    Ok(state.is_configured().await)
+}
+
+#[tauri::command]
+async fn gdrive_is_authenticated(state: State<'_, GDriveState>) -> Result<bool, String> {
+    Ok(state.is_authenticated().await)
+}
+
+#[tauri::command]
+async fn gdrive_save_config(
+    state: State<'_, GDriveState>,
+    config: GDriveConfig,
+) -> Result<(), String> {
+    state.save_config(config).await
+}
+
+#[tauri::command]
+async fn gdrive_get_auth_url(
+    state: State<'_, GDriveState>,
+    redirect_port: u16,
+) -> Result<String, String> {
+    state.get_auth_url(redirect_port).await
+}
+
+#[tauri::command]
+async fn gdrive_exchange_code(
+    state: State<'_, GDriveState>,
+    code: String,
+    redirect_port: u16,
+) -> Result<(), String> {
+    state.exchange_code(&code, redirect_port).await
+}
+
+#[tauri::command]
+async fn gdrive_list_files(
+    state: State<'_, GDriveState>,
+    folder_id: Option<String>,
+) -> Result<Vec<DriveFile>, String> {
+    state
+        .list_files(folder_id.as_deref())
+        .await
+}
+
+#[tauri::command]
+async fn gdrive_download_file(
+    state: State<'_, GDriveState>,
+    file_id: String,
+    dest: String,
+) -> Result<String, String> {
+    state.download_file(&file_id, &dest).await
+}
+
 // ── App setup ──
 
 fn get_app_data_dir(app: &tauri::App) -> PathBuf {
@@ -164,6 +263,18 @@ pub fn run() {
             add_todo,
             toggle_todo,
             remove_todo,
+            slack_is_configured,
+            slack_get_config,
+            slack_save_config,
+            slack_list_items,
+            slack_create_item,
+            gdrive_is_configured,
+            gdrive_is_authenticated,
+            gdrive_save_config,
+            gdrive_get_auth_url,
+            gdrive_exchange_code,
+            gdrive_list_files,
+            gdrive_download_file,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -181,12 +292,28 @@ pub fn run() {
             app.manage(skill_store);
 
             // Initialize todo manager
-            let todo_manager = Arc::new(TodoManager::new(data_dir));
+            let todo_manager = Arc::new(TodoManager::new(data_dir.clone()));
             let todo_ref = todo_manager.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = todo_ref.load().await;
             });
             app.manage(todo_manager);
+
+            // Initialize Slack client
+            let slack_client = Arc::new(SlackClient::new(data_dir.clone()));
+            let slack_ref = slack_client.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = slack_ref.load_config().await;
+            });
+            app.manage(slack_client);
+
+            // Initialize Google Drive client
+            let gdrive_client = Arc::new(GDriveClient::new(data_dir));
+            let gdrive_ref = gdrive_client.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = gdrive_ref.load().await;
+            });
+            app.manage(gdrive_client);
 
             Ok(())
         })
