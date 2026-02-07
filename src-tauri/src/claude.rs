@@ -299,3 +299,236 @@ impl ClaudeManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── ClaudeStreamEvent deserialization ──
+
+    #[test]
+    fn test_parse_system_event() {
+        let json_str = r#"{"type":"system","subtype":"init","session_id":"abc-123","cwd":"/tmp"}"#;
+        let event: ClaudeStreamEvent = serde_json::from_str(json_str).unwrap();
+        match event {
+            ClaudeStreamEvent::System { subtype, session_id, .. } => {
+                assert_eq!(subtype.unwrap(), "init");
+                assert_eq!(session_id.unwrap(), "abc-123");
+            }
+            _ => panic!("Expected System event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_assistant_text() {
+        let json_str = r#"{
+            "type": "assistant",
+            "message": {
+                "id": "msg_01",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5-20250929",
+                "content": [{"type": "text", "text": "Hello!"}]
+            }
+        }"#;
+        let event: ClaudeStreamEvent = serde_json::from_str(json_str).unwrap();
+        match event {
+            ClaudeStreamEvent::Assistant { message, .. } => {
+                assert_eq!(message.content.len(), 1);
+                match &message.content[0] {
+                    ContentBlock::Text { text } => assert_eq!(text, "Hello!"),
+                    _ => panic!("Expected Text block"),
+                }
+            }
+            _ => panic!("Expected Assistant event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_assistant_tool_use() {
+        let json_str = r#"{
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "Let me check."},
+                    {"type": "tool_use", "id": "toolu_01", "name": "Read", "input": {"file_path": "/tmp/x"}}
+                ]
+            }
+        }"#;
+        let event: ClaudeStreamEvent = serde_json::from_str(json_str).unwrap();
+        match event {
+            ClaudeStreamEvent::Assistant { message, .. } => {
+                assert_eq!(message.content.len(), 2);
+                match &message.content[1] {
+                    ContentBlock::ToolUse { id, name, input } => {
+                        assert_eq!(id, "toolu_01");
+                        assert_eq!(name, "Read");
+                        assert_eq!(input["file_path"], "/tmp/x");
+                    }
+                    _ => panic!("Expected ToolUse block"),
+                }
+            }
+            _ => panic!("Expected Assistant event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_user_tool_result() {
+        let json_str = r#"{
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "file data"}]
+            }
+        }"#;
+        let event: ClaudeStreamEvent = serde_json::from_str(json_str).unwrap();
+        match event {
+            ClaudeStreamEvent::User { message, .. } => {
+                let content = message["content"].as_array().unwrap();
+                assert_eq!(content[0]["tool_use_id"], "toolu_01");
+            }
+            _ => panic!("Expected User event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_result_success() {
+        let json_str = r#"{
+            "type": "result",
+            "subtype": "success",
+            "result": "Done!",
+            "is_error": false,
+            "duration_ms": 1234,
+            "num_turns": 2,
+            "total_cost_usd": 0.01
+        }"#;
+        let event: ClaudeStreamEvent = serde_json::from_str(json_str).unwrap();
+        match event {
+            ClaudeStreamEvent::Result { subtype, result, is_error, .. } => {
+                assert_eq!(subtype.unwrap(), "success");
+                assert_eq!(result.unwrap(), "Done!");
+                assert_eq!(is_error.unwrap(), false);
+            }
+            _ => panic!("Expected Result event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_result_error() {
+        let json_str = r#"{
+            "type": "result",
+            "subtype": "error_max_turns",
+            "result": "",
+            "is_error": true
+        }"#;
+        let event: ClaudeStreamEvent = serde_json::from_str(json_str).unwrap();
+        match event {
+            ClaudeStreamEvent::Result { subtype, is_error, .. } => {
+                assert_eq!(subtype.unwrap(), "error_max_turns");
+                assert_eq!(is_error.unwrap(), true);
+            }
+            _ => panic!("Expected Result event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stream_event_text_delta() {
+        let json_str = r#"{
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "He"}
+            }
+        }"#;
+        let event: ClaudeStreamEvent = serde_json::from_str(json_str).unwrap();
+        match event {
+            ClaudeStreamEvent::StreamEvent { event, .. } => {
+                let text = event["delta"]["text"].as_str().unwrap();
+                assert_eq!(text, "He");
+            }
+            _ => panic!("Expected StreamEvent"),
+        }
+    }
+
+    // ── ContentBlock ──
+
+    #[test]
+    fn test_content_block_text() {
+        let json_str = r#"{"type": "text", "text": "hello world"}"#;
+        let block: ContentBlock = serde_json::from_str(json_str).unwrap();
+        match block {
+            ContentBlock::Text { text } => assert_eq!(text, "hello world"),
+            _ => panic!("Expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_content_block_tool_use() {
+        let json_str = r#"{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}"#;
+        let block: ContentBlock = serde_json::from_str(json_str).unwrap();
+        match block {
+            ContentBlock::ToolUse { id, name, input } => {
+                assert_eq!(id, "t1");
+                assert_eq!(name, "Bash");
+                assert_eq!(input["command"], "ls");
+            }
+            _ => panic!("Expected ToolUse"),
+        }
+    }
+
+    // ── ClaudeManager ──
+
+    #[tokio::test]
+    async fn test_manager_working_dir() {
+        let mgr = ClaudeManager::new();
+        assert_eq!(mgr.get_working_dir().await, "");
+
+        mgr.set_working_dir("/tmp/test".to_string()).await;
+        assert_eq!(mgr.get_working_dir().await, "/tmp/test");
+    }
+
+    #[tokio::test]
+    async fn test_manager_working_dir_change() {
+        let mgr = ClaudeManager::new();
+        mgr.set_working_dir("/first".to_string()).await;
+        mgr.set_working_dir("/second".to_string()).await;
+        assert_eq!(mgr.get_working_dir().await, "/second");
+    }
+
+    // ── NDJSON multi-line parsing simulation ──
+
+    #[test]
+    fn test_parse_ndjson_sequence() {
+        let lines = vec![
+            r#"{"type":"system","subtype":"init","session_id":"s1"}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hi"}]}}"#,
+            r#"{"type":"result","subtype":"success","result":"Hi","is_error":false}"#,
+        ];
+
+        let mut events = Vec::new();
+        for line in lines {
+            let event: ClaudeStreamEvent = serde_json::from_str(line).unwrap();
+            events.push(event);
+        }
+
+        assert_eq!(events.len(), 3);
+        assert!(matches!(&events[0], ClaudeStreamEvent::System { .. }));
+        assert!(matches!(&events[1], ClaudeStreamEvent::Assistant { .. }));
+        assert!(matches!(&events[2], ClaudeStreamEvent::Result { .. }));
+    }
+
+    #[test]
+    fn test_parse_unknown_fields_ignored() {
+        // Extra fields should be captured in `extra` via #[serde(flatten)]
+        let json_str = r#"{
+            "type": "system",
+            "subtype": "init",
+            "session_id": "s1",
+            "unknown_field": "should not cause error",
+            "model": "claude-sonnet-4-5-20250929"
+        }"#;
+        let event: ClaudeStreamEvent = serde_json::from_str(json_str).unwrap();
+        assert!(matches!(event, ClaudeStreamEvent::System { .. }));
+    }
+}

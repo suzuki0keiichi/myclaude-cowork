@@ -1,11 +1,16 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { useClaude } from "./hooks/useClaude";
 import { MessageBubble } from "./components/MessageBubble";
 import { ChatInput } from "./components/ChatInput";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { StreamingIndicator } from "./components/StreamingIndicator";
 import { SetupScreen } from "./components/SetupScreen";
+import { FileBrowser } from "./components/FileBrowser";
+import { TodoPanel } from "./components/TodoPanel";
+import { SkillManager } from "./components/SkillManager";
 import "./App.css";
+
+type SidebarTab = "files" | "skills" | "todos";
 
 function App() {
   const {
@@ -21,8 +26,8 @@ function App() {
   } = useClaude();
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("files");
 
-  // Auto-scroll to bottom on new messages
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingText]);
@@ -39,30 +44,42 @@ function App() {
           <span className="logo">Cowork</span>
         </div>
 
-        <div className="sidebar-section">
-          <div className="sidebar-section-title">作業フォルダ</div>
-          <div className="sidebar-item active">
-            <span className="sidebar-icon">📁</span>
-            <span className="sidebar-text" title={workingDir}>
-              {workingDir.split(/[/\\]/).pop() || workingDir}
-            </span>
-          </div>
+        {/* Tab switcher */}
+        <div className="sidebar-tabs">
+          <button
+            className={`sidebar-tab ${sidebarTab === "files" ? "active" : ""}`}
+            onClick={() => setSidebarTab("files")}
+          >
+            📁 ファイル
+          </button>
+          <button
+            className={`sidebar-tab ${sidebarTab === "skills" ? "active" : ""}`}
+            onClick={() => setSidebarTab("skills")}
+          >
+            ⚡ スキル
+          </button>
+          <button
+            className={`sidebar-tab ${sidebarTab === "todos" ? "active" : ""}`}
+            onClick={() => setSidebarTab("todos")}
+          >
+            ☑ TODO
+          </button>
         </div>
 
-        <div className="sidebar-section">
-          <div className="sidebar-section-title">スキル</div>
-          <div className="sidebar-item disabled">
-            <span className="sidebar-icon">⚡</span>
-            <span className="sidebar-text">準備中...</span>
-          </div>
-        </div>
-
-        <div className="sidebar-section">
-          <div className="sidebar-section-title">TODO</div>
-          <div className="sidebar-item disabled">
-            <span className="sidebar-icon">☑</span>
-            <span className="sidebar-text">準備中...</span>
-          </div>
+        {/* Tab content */}
+        <div className="sidebar-content">
+          {sidebarTab === "files" && (
+            <FileBrowser
+              workingDir={workingDir}
+              onFileSelect={(path) =>
+                sendMessage(`このファイルの内容を確認して: ${path}`)
+              }
+            />
+          )}
+          {sidebarTab === "skills" && (
+            <SkillManager onExecuteSkill={sendMessage} />
+          )}
+          {sidebarTab === "todos" && <TodoPanel />}
         </div>
 
         <div className="sidebar-footer">
@@ -83,6 +100,9 @@ function App() {
         <div className="chat-header">
           <span>チャット</span>
           {isLoading && <span className="loading-badge">応答中...</span>}
+          <span className="chat-header-path" title={workingDir}>
+            {workingDir}
+          </span>
         </div>
 
         <div className="chat-messages">
@@ -109,6 +129,14 @@ function App() {
                   }
                 >
                   フォルダ構成を説明して
+                </div>
+                <div
+                  className="example-chip"
+                  onClick={() =>
+                    sendMessage("最近変更されたファイルを教えて")
+                  }
+                >
+                  最近の変更を教えて
                 </div>
               </div>
             </div>
