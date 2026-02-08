@@ -8,7 +8,7 @@ use crate::oauth_server;
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const DRIVE_API: &str = "https://www.googleapis.com/drive/v3";
-const SCOPES: &str = "https://www.googleapis.com/auth/drive.readonly";
+const SCOPES: &str = "https://www.googleapis.com/auth/drive";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GDriveConfig {
@@ -493,10 +493,10 @@ mod tests {
 
     #[test]
     fn test_urlencoding_scope() {
-        let scope = "https://www.googleapis.com/auth/drive.readonly";
+        let scope = "https://www.googleapis.com/auth/drive";
         let encoded = urlencoding(scope);
         assert!(encoded.contains("https%3A%2F%2F"));
-        assert!(encoded.contains("drive.readonly"));
+        assert!(encoded.contains("drive"));
     }
 
     #[tokio::test]
