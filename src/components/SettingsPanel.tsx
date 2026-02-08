@@ -6,11 +6,6 @@ interface SlackConfig {
   default_list_id: string | null;
 }
 
-interface GDriveConfig {
-  client_id: string;
-  client_secret: string;
-}
-
 type SettingsSection = "slack" | "gdrive";
 
 export function SettingsPanel() {
