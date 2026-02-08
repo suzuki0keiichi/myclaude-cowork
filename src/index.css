@@ -1,23 +1,23 @@
 :root {
-  --bg-primary: #1a1a2e;
-  --bg-secondary: #16213e;
-  --bg-tertiary: #0f3460;
-  --bg-chat: #1e1e3a;
-  --bg-input: #252547;
-  --bg-hover: #2a2a4a;
-  --bg-user-msg: #3a3a6a;
-  --bg-assistant-msg: #252547;
-  --bg-activity: #1e2a45;
-  --text-primary: #e8e8f0;
-  --text-secondary: #a0a0c0;
-  --text-muted: #6a6a8a;
-  --accent: #e94560;
-  --accent-hover: #f05070;
-  --border: #2a2a4a;
-  --success: #4ade80;
-  --warning: #fbbf24;
-  --danger: #ef4444;
-  --scrollbar-thumb: #3a3a6a;
+  --bg-primary: #f5f3f0;
+  --bg-secondary: #edeae6;
+  --bg-tertiary: #e4e0db;
+  --bg-chat: #faf8f6;
+  --bg-input: #ffffff;
+  --bg-hover: #e8e4df;
+  --bg-user-msg: #e0ebe7;
+  --bg-assistant-msg: #f0eeeb;
+  --bg-activity: #edeae6;
+  --text-primary: #2c2926;
+  --text-secondary: #5c5750;
+  --text-muted: #837d75;
+  --accent: #24806e;
+  --accent-hover: #1e7264;
+  --border: #d8d3cc;
+  --success: #3a9a6c;
+  --warning: #a67a1e;
+  --danger: #c4534a;
+  --scrollbar-thumb: #c8c2ba;
   --scrollbar-track: transparent;
 }
 

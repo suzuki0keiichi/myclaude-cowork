@@ -15,18 +15,18 @@ pub struct FileEntry {
 pub async fn list_directory(path: &str) -> Result<Vec<FileEntry>, String> {
     let dir_path = Path::new(path);
     if !dir_path.is_dir() {
-        return Err(format!("Not a directory: {}", path));
+        return Err(format!("フォルダではありません: {}", path));
     }
 
     let mut entries = Vec::new();
     let mut read_dir = fs::read_dir(dir_path)
         .await
-        .map_err(|e| format!("Failed to read directory: {}", e))?;
+        .map_err(|e| format!("フォルダを読み込めませんでした: {}", e))?;
 
     while let Some(entry) = read_dir
         .next_entry()
         .await
-        .map_err(|e| format!("Failed to read entry: {}", e))?
+        .map_err(|e| format!("ファイル情報を読み込めませんでした: {}", e))?
     {
         let name = entry.file_name().to_string_lossy().to_string();
 
@@ -84,6 +84,7 @@ pub async fn get_file_tree(path: &str) -> Result<FileEntry, String> {
 }
 
 /// Format file size for display
+#[allow(dead_code)]
 pub fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{} B", bytes)

@@ -1,143 +1,26 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-
-interface SlackConfig {
-  bot_token: string;
-  default_list_id: string | null;
-}
-
-type SettingsSection = "slack" | "gdrive";
+import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-shell";
 
 export function SettingsPanel() {
-  const [section, setSection] = useState<SettingsSection>("slack");
-
   return (
     <div style={styles.container}>
-      <div style={styles.tabs}>
-        <button
-          style={{
-            ...styles.tab,
-            ...(section === "slack" ? styles.tabActive : {}),
-          }}
-          onClick={() => setSection("slack")}
-        >
-          Slack
-        </button>
-        <button
-          style={{
-            ...styles.tab,
-            ...(section === "gdrive" ? styles.tabActive : {}),
-          }}
-          onClick={() => setSection("gdrive")}
-        >
-          Google Drive
-        </button>
-      </div>
       <div style={styles.content}>
-        {section === "slack" && <SlackSettings />}
-        {section === "gdrive" && <GDriveSettings />}
+        <GDriveSettings />
+        <div style={styles.divider} />
+        <SlackSettings />
       </div>
     </div>
   );
 }
 
-function SlackSettings() {
-  const [configured, setConfigured] = useState(false);
-  const [botToken, setBotToken] = useState("");
-  const [listId, setListId] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
-
-  const loadConfig = useCallback(async () => {
-    try {
-      const isConfigured = await invoke<boolean>("slack_is_configured");
-      setConfigured(isConfigured);
-      if (isConfigured) {
-        const config = await invoke<SlackConfig | null>("slack_get_config");
-        if (config) {
-          setBotToken(config.bot_token);
-          setListId(config.default_list_id || "");
-        }
-      }
-    } catch (e) {
-      console.error("Failed to load slack config:", e);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadConfig();
-  }, [loadConfig]);
-
-  const saveConfig = async () => {
-    if (!botToken.trim()) return;
-    setSaving(true);
-    setMessage("");
-    try {
-      await invoke("slack_save_config", {
-        config: {
-          bot_token: botToken.trim(),
-          default_list_id: listId.trim() || null,
-        },
-      });
-      setConfigured(true);
-      setMessage("保存しました");
-    } catch (e) {
-      setMessage(`エラー: ${e}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div style={styles.section}>
-      <h3 style={styles.sectionTitle}>Slack Lists 連携</h3>
-      <p style={styles.desc}>
-        Slack Botトークンを設定すると、SlackリストとTODOを同期できます。
-      </p>
-
-      <label style={styles.label}>Bot Token (xoxb-...)</label>
-      <input
-        type="password"
-        value={botToken}
-        onChange={(e) => setBotToken(e.target.value)}
-        placeholder="xoxb-..."
-        style={styles.input}
-      />
-
-      <label style={styles.label}>デフォルトリストID (任意)</label>
-      <input
-        type="text"
-        value={listId}
-        onChange={(e) => setListId(e.target.value)}
-        placeholder="L..."
-        style={styles.input}
-      />
-
-      <button
-        onClick={saveConfig}
-        disabled={!botToken.trim() || saving}
-        style={{
-          ...styles.saveButton,
-          opacity: botToken.trim() && !saving ? 1 : 0.5,
-        }}
-      >
-        {saving ? "保存中..." : "設定を保存"}
-      </button>
-
-      {configured && (
-        <div style={styles.statusConnected}>接続済み</div>
-      )}
-      {message && <div style={styles.message}>{message}</div>}
-    </div>
-  );
-}
+// ── Google Drive ──
 
 function GDriveSettings() {
   const [configured, setConfigured] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
-  const [clientId, setClientId] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
   const loadStatus = useCallback(async () => {
@@ -155,55 +38,41 @@ function GDriveSettings() {
 
   useEffect(() => {
     loadStatus();
+
+    const unlisteners = [
+      listen("gdrive:auth_complete", () => {
+        setAuthenticated(true);
+        setLoading(false);
+        setMessage("認証が完了しました");
+      }),
+      listen("gdrive:auth_error", (e) => {
+        setLoading(false);
+        setMessage(`認証エラー: ${e.payload}`);
+      }),
+    ];
+
+    return () => {
+      unlisteners.forEach((p) => p.then((f) => f()));
+    };
   }, [loadStatus]);
 
-  const saveConfig = async () => {
-    if (!clientId.trim() || !clientSecret.trim()) return;
-    setSaving(true);
-    setMessage("");
-    try {
-      await invoke("gdrive_save_config", {
-        config: {
-          client_id: clientId.trim(),
-          client_secret: clientSecret.trim(),
-        },
-      });
-      setConfigured(true);
-      setMessage("保存しました");
-    } catch (e) {
-      setMessage(`エラー: ${e}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const startAuth = async () => {
-    setMessage("");
+    setLoading(true);
+    setMessage("ブラウザで認証してください...");
     try {
-      const url = await invoke<string>("gdrive_get_auth_url", {
-        redirectPort: 8923,
-      });
-      // Open the auth URL in the system browser
-      window.open(url, "_blank");
-      setMessage("ブラウザで認証してください。認証コードをここに貼り付けてください。");
+      const url = await invoke<string>("gdrive_start_auth");
+      await open(url);
     } catch (e) {
+      setLoading(false);
       setMessage(`エラー: ${e}`);
     }
   };
 
-  const [authCode, setAuthCode] = useState("");
-
-  const submitAuthCode = async () => {
-    if (!authCode.trim()) return;
-    setMessage("");
+  const logout = async () => {
     try {
-      await invoke("gdrive_exchange_code", {
-        code: authCode.trim(),
-        redirectPort: 8923,
-      });
-      setAuthenticated(true);
-      setAuthCode("");
-      setMessage("認証完了しました");
+      await invoke("gdrive_logout");
+      setAuthenticated(false);
+      setMessage("ログアウトしました");
     } catch (e) {
       setMessage(`エラー: ${e}`);
     }
@@ -212,74 +81,192 @@ function GDriveSettings() {
   return (
     <div style={styles.section}>
       <h3 style={styles.sectionTitle}>Google Drive 連携</h3>
-      <p style={styles.desc}>
-        Google Cloud ConsoleでOAuth2クライアントを作成し、IDとシークレットを入力してください。
-      </p>
 
-      <label style={styles.label}>Client ID</label>
-      <input
-        type="text"
-        value={clientId}
-        onChange={(e) => setClientId(e.target.value)}
-        placeholder="xxxxx.apps.googleusercontent.com"
-        style={styles.input}
-      />
-
-      <label style={styles.label}>Client Secret</label>
-      <input
-        type="password"
-        value={clientSecret}
-        onChange={(e) => setClientSecret(e.target.value)}
-        placeholder="GOCSPX-..."
-        style={styles.input}
-      />
-
-      <button
-        onClick={saveConfig}
-        disabled={!clientId.trim() || !clientSecret.trim() || saving}
-        style={{
-          ...styles.saveButton,
-          opacity:
-            clientId.trim() && clientSecret.trim() && !saving ? 1 : 0.5,
-        }}
-      >
-        {saving ? "保存中..." : "設定を保存"}
-      </button>
-
-      {configured && !authenticated && (
-        <div style={styles.authSection}>
-          <button onClick={startAuth} style={styles.authButton}>
-            Googleアカウントで認証
-          </button>
-          <input
-            type="text"
-            value={authCode}
-            onChange={(e) => setAuthCode(e.target.value)}
-            placeholder="認証コードを貼り付け..."
-            style={styles.input}
-          />
+      {!configured ? (
+        <p style={styles.desc}>
+          Google
+          Drive連携の設定がアプリに含まれていません。開発者に連絡してください。
+        </p>
+      ) : !authenticated ? (
+        <div style={styles.authRow}>
           <button
-            onClick={submitAuthCode}
-            disabled={!authCode.trim()}
+            onClick={startAuth}
+            disabled={loading}
             style={{
-              ...styles.saveButton,
-              opacity: authCode.trim() ? 1 : 0.5,
+              ...styles.authButton,
+              opacity: loading ? 0.6 : 1,
             }}
           >
-            認証コードを送信
+            {loading ? "認証中..." : "Googleでログイン"}
+          </button>
+        </div>
+      ) : (
+        <div style={styles.authRow}>
+          <span style={styles.statusOk}>認証済み</span>
+          <button onClick={logout} style={styles.logoutButton}>
+            ログアウト
           </button>
         </div>
       )}
-
-      <div style={styles.statusRow}>
-        <span>設定: {configured ? "済み" : "未設定"}</span>
-        <span>認証: {authenticated ? "済み" : "未認証"}</span>
-      </div>
 
       {message && <div style={styles.message}>{message}</div>}
     </div>
   );
 }
+
+// ── Slack ──
+
+function SlackSettings() {
+  const [configured, setConfigured] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [teamName, setTeamName] = useState("");
+  const [listId, setListId] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const isConfigured = await invoke<boolean>("slack_is_configured");
+      setConfigured(isConfigured);
+      if (isConfigured) {
+        const isAuth = await invoke<boolean>("slack_is_authenticated");
+        setAuthenticated(isAuth);
+        if (isAuth) {
+          const name = await invoke<string | null>("slack_get_team_name");
+          setTeamName(name || "");
+        }
+        const settings = await invoke<{ default_list_id: string | null }>(
+          "slack_get_settings"
+        );
+        setListId(settings.default_list_id || "");
+      }
+    } catch (e) {
+      console.error("Failed to load slack status:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStatus();
+
+    const unlisteners = [
+      listen("slack:auth_complete", () => {
+        setAuthenticated(true);
+        setLoading(false);
+        setMessage("認証が完了しました");
+        // Reload to get team name
+        invoke<string | null>("slack_get_team_name").then((name) =>
+          setTeamName(name || "")
+        );
+      }),
+      listen("slack:auth_error", (e) => {
+        setLoading(false);
+        setMessage(`認証エラー: ${e.payload}`);
+      }),
+    ];
+
+    return () => {
+      unlisteners.forEach((p) => p.then((f) => f()));
+    };
+  }, [loadStatus]);
+
+  const startAuth = async () => {
+    setLoading(true);
+    setMessage("ブラウザで認証してください...");
+    try {
+      const url = await invoke<string>("slack_start_auth");
+      await open(url);
+    } catch (e) {
+      setLoading(false);
+      setMessage(`エラー: ${e}`);
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await invoke("slack_logout");
+      setAuthenticated(false);
+      setTeamName("");
+      setMessage("ログアウトしました");
+    } catch (e) {
+      setMessage(`エラー: ${e}`);
+    }
+  };
+
+  const saveSettings = async () => {
+    setSaving(true);
+    setMessage("");
+    try {
+      await invoke("slack_save_settings", {
+        settings: { default_list_id: listId.trim() || null },
+      });
+      setMessage("保存しました");
+    } catch (e) {
+      setMessage(`エラー: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={styles.section}>
+      <h3 style={styles.sectionTitle}>Slack 連携</h3>
+
+      {!configured ? (
+        <p style={styles.desc}>
+          Slack連携の設定がアプリに含まれていません。開発者に連絡してください。
+        </p>
+      ) : !authenticated ? (
+        <div style={styles.authRow}>
+          <button
+            onClick={startAuth}
+            disabled={loading}
+            style={{
+              ...styles.authButton,
+              opacity: loading ? 0.6 : 1,
+            }}
+          >
+            {loading ? "認証中..." : "Slackに追加"}
+          </button>
+        </div>
+      ) : (
+        <div style={styles.configSection}>
+          <div style={styles.authRow}>
+            <span style={styles.statusOk}>
+              認証済み{teamName ? ` (${teamName})` : ""}
+            </span>
+            <button onClick={logout} style={styles.logoutButton}>
+              ログアウト
+            </button>
+          </div>
+
+          <label style={styles.label}>リストID</label>
+          <input
+            type="text"
+            value={listId}
+            onChange={(e) => setListId(e.target.value)}
+            placeholder="L..."
+            style={styles.input}
+          />
+          <button
+            onClick={saveSettings}
+            disabled={saving}
+            style={{
+              ...styles.saveButton,
+              opacity: saving ? 0.5 : 1,
+            }}
+          >
+            {saving ? "保存中..." : "保存"}
+          </button>
+        </div>
+      )}
+
+      {message && <div style={styles.message}>{message}</div>}
+    </div>
+  );
+}
+
+// ── Styles ──
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
@@ -288,34 +275,14 @@ const styles: Record<string, React.CSSProperties> = {
     height: "100%",
     overflow: "hidden",
   },
-  tabs: {
-    display: "flex",
-    borderBottom: "1px solid var(--border)",
-  },
-  tab: {
-    flex: 1,
-    padding: "8px 4px",
-    background: "none",
-    border: "none",
-    borderBottom: "2px solid transparent",
-    color: "var(--text-muted)",
-    fontSize: "11px",
-    fontFamily: "inherit",
-    cursor: "pointer",
-    textAlign: "center" as const,
-  },
-  tabActive: {
-    color: "var(--text-primary)",
-    borderBottomColor: "var(--accent)",
-  },
   content: {
     flex: 1,
-    overflowY: "auto" as const,
+    overflowY: "auto",
     padding: "12px",
   },
   section: {
     display: "flex",
-    flexDirection: "column" as const,
+    flexDirection: "column",
     gap: "8px",
   },
   sectionTitle: {
@@ -328,7 +295,47 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "11px",
     color: "var(--text-muted)",
     lineHeight: 1.5,
-    marginBottom: "8px",
+  },
+  divider: {
+    height: "1px",
+    background: "var(--border)",
+    margin: "16px 0",
+  },
+  authRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+  },
+  authButton: {
+    background: "var(--accent)",
+    border: "none",
+    color: "white",
+    borderRadius: "4px",
+    padding: "8px 16px",
+    fontSize: "12px",
+    fontFamily: "inherit",
+    cursor: "pointer",
+    fontWeight: 500,
+  },
+  statusOk: {
+    fontSize: "12px",
+    color: "var(--success, #22c55e)",
+    fontWeight: 500,
+  },
+  logoutButton: {
+    background: "none",
+    border: "1px solid var(--border)",
+    color: "var(--text-muted)",
+    borderRadius: "4px",
+    padding: "4px 10px",
+    fontSize: "11px",
+    fontFamily: "inherit",
+    cursor: "pointer",
+  },
+  configSection: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
   },
   label: {
     fontSize: "11px",
@@ -355,38 +362,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "12px",
     fontFamily: "inherit",
     cursor: "pointer",
-    marginTop: "4px",
-  },
-  authSection: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: "8px",
-    marginTop: "8px",
-    padding: "8px",
-    border: "1px solid var(--border)",
-    borderRadius: "6px",
-  },
-  authButton: {
-    background: "var(--bg-tertiary)",
-    border: "1px solid var(--border)",
-    color: "var(--text-primary)",
-    borderRadius: "4px",
-    padding: "8px 12px",
-    fontSize: "12px",
-    fontFamily: "inherit",
-    cursor: "pointer",
-  },
-  statusConnected: {
-    fontSize: "11px",
-    color: "var(--success)",
-    fontWeight: 500,
-  },
-  statusRow: {
-    display: "flex",
-    gap: "16px",
-    fontSize: "11px",
-    color: "var(--text-muted)",
-    marginTop: "4px",
+    alignSelf: "flex-start",
   },
   message: {
     fontSize: "11px",

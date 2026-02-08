@@ -10,16 +10,18 @@ interface TodoItem {
 }
 
 export function TodoPanel() {
-  const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [items, setItems] = useState<TodoItem[]>([]);
   const [newTodo, setNewTodo] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const loadTodos = useCallback(async () => {
     try {
-      const items = await invoke<TodoItem[]>("list_todos");
-      setTodos(items);
+      const todos = await invoke<TodoItem[]>("todo_list");
+      setItems(todos);
     } catch (e) {
       console.error("Failed to load todos:", e);
+      setError(String(e));
     }
   }, []);
 
@@ -31,31 +33,37 @@ export function TodoPanel() {
     if (!newTodo.trim()) return;
     setLoading(true);
     try {
-      await invoke("add_todo", { text: newTodo.trim(), dueDate: null });
+      await invoke<TodoItem>("todo_add", {
+        text: newTodo.trim(),
+        dueDate: null,
+      });
       setNewTodo("");
       await loadTodos();
     } catch (e) {
       console.error("Failed to add todo:", e);
+      setError(String(e));
     } finally {
       setLoading(false);
     }
   };
 
-  const toggleTodo = async (id: string) => {
+  const toggleItem = async (id: string) => {
     try {
-      await invoke("toggle_todo", { id });
+      await invoke("todo_toggle", { id });
       await loadTodos();
     } catch (e) {
-      console.error("Failed to toggle todo:", e);
+      console.error("Failed to toggle item:", e);
+      setError(String(e));
     }
   };
 
-  const removeTodo = async (id: string) => {
+  const removeItem = async (id: string) => {
     try {
-      await invoke("remove_todo", { id });
+      await invoke("todo_remove", { id });
       await loadTodos();
     } catch (e) {
-      console.error("Failed to remove todo:", e);
+      console.error("Failed to remove item:", e);
+      setError(String(e));
     }
   };
 
@@ -65,46 +73,60 @@ export function TodoPanel() {
     }
   };
 
-  const pending = todos.filter((t) => !t.done);
-  const completed = todos.filter((t) => t.done);
+  const pending = items.filter((t) => !t.done);
+  const completed = items.filter((t) => t.done);
 
   return (
     <div style={styles.container}>
-      <div style={styles.inputRow}>
-        <input
-          type="text"
-          value={newTodo}
-          onChange={(e) => setNewTodo(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="新しいTODO..."
-          style={styles.input}
-          disabled={loading}
-        />
-        <button
-          onClick={addTodo}
-          disabled={!newTodo.trim() || loading}
-          style={{
-            ...styles.addButton,
-            opacity: newTodo.trim() ? 1 : 0.4,
-          }}
-        >
-          +
-        </button>
+      <div style={styles.headerRow}>
+        <div style={styles.inputRow}>
+          <input
+            type="text"
+            value={newTodo}
+            onChange={(e) => setNewTodo(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="新しいTODO..."
+            style={styles.input}
+            disabled={loading}
+          />
+          <button
+            onClick={addTodo}
+            disabled={!newTodo.trim() || loading}
+            style={{
+              ...styles.addButton,
+              opacity: newTodo.trim() ? 1 : 0.4,
+            }}
+          >
+            +
+          </button>
+        </div>
       </div>
 
+      {error && (
+        <div style={styles.errorBar}>
+          {error}
+          <button
+            onClick={() => setError(null)}
+            style={styles.errorDismiss}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <div style={styles.list}>
-        {pending.map((todo) => (
-          <div key={todo.id} style={styles.item}>
+        {pending.map((item) => (
+          <div key={item.id} style={styles.item}>
             <button
-              onClick={() => toggleTodo(todo.id)}
+              onClick={() => toggleItem(item.id)}
               style={styles.checkbox}
               title="完了にする"
             >
               ○
             </button>
-            <span style={styles.text}>{todo.text}</span>
+            <span style={styles.text}>{item.text}</span>
             <button
-              onClick={() => removeTodo(todo.id)}
+              onClick={() => removeItem(item.id)}
               style={styles.deleteButton}
               title="削除"
             >
@@ -115,21 +137,25 @@ export function TodoPanel() {
 
         {completed.length > 0 && (
           <>
-            <div style={styles.completedHeader}>完了済み ({completed.length})</div>
-            {completed.map((todo) => (
-              <div key={todo.id} style={{ ...styles.item, opacity: 0.5 }}>
+            <div style={styles.completedHeader}>
+              完了済み ({completed.length})
+            </div>
+            {completed.map((item) => (
+              <div key={item.id} style={{ ...styles.item, opacity: 0.5 }}>
                 <button
-                  onClick={() => toggleTodo(todo.id)}
+                  onClick={() => toggleItem(item.id)}
                   style={styles.checkbox}
                   title="未完了に戻す"
                 >
                   ✓
                 </button>
-                <span style={{ ...styles.text, textDecoration: "line-through" }}>
-                  {todo.text}
+                <span
+                  style={{ ...styles.text, textDecoration: "line-through" }}
+                >
+                  {item.text}
                 </span>
                 <button
-                  onClick={() => removeTodo(todo.id)}
+                  onClick={() => removeItem(item.id)}
                   style={styles.deleteButton}
                   title="削除"
                 >
@@ -140,7 +166,7 @@ export function TodoPanel() {
           </>
         )}
 
-        {todos.length === 0 && (
+        {items.length === 0 && (
           <div style={styles.empty}>TODOはありません</div>
         )}
       </div>
@@ -155,11 +181,13 @@ const styles: Record<string, React.CSSProperties> = {
     height: "100%",
     overflow: "hidden",
   },
+  headerRow: {
+    borderBottom: "1px solid var(--border)",
+  },
   inputRow: {
     display: "flex",
     gap: "4px",
     padding: "8px 12px",
-    borderBottom: "1px solid var(--border)",
   },
   input: {
     flex: 1,
@@ -184,6 +212,25 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+  },
+  errorBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    padding: "4px 12px",
+    fontSize: "11px",
+    color: "#e55",
+    background: "rgba(255,50,50,0.08)",
+    borderBottom: "1px solid var(--border)",
+  },
+  errorDismiss: {
+    background: "none",
+    border: "none",
+    color: "#e55",
+    cursor: "pointer",
+    fontSize: "14px",
+    marginLeft: "auto",
+    padding: "0 2px",
   },
   list: {
     flex: 1,

@@ -12,9 +12,11 @@ interface FileEntry {
 interface FileBrowserProps {
   workingDir: string;
   onFileSelect?: (path: string) => void;
+  selectedFiles?: string[];
+  onFileToggle?: (path: string) => void;
 }
 
-export function FileBrowser({ workingDir, onFileSelect }: FileBrowserProps) {
+export function FileBrowser({ workingDir, onFileSelect, selectedFiles = [], onFileToggle }: FileBrowserProps) {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [currentPath, setCurrentPath] = useState(workingDir);
   const [loading, setLoading] = useState(false);
@@ -55,13 +57,6 @@ export function FileBrowser({ workingDir, onFileSelect }: FileBrowserProps) {
     }
   };
 
-  const formatSize = (bytes: number | null): string => {
-    if (bytes === null) return "";
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
   return (
     <div style={styles.container}>
       <div style={styles.pathBar}>
@@ -87,10 +82,25 @@ export function FileBrowser({ workingDir, onFileSelect }: FileBrowserProps) {
         {entries.map((entry) => (
           <div
             key={entry.path}
-            style={styles.entry}
+            style={{
+              ...styles.entry,
+              ...(selectedFiles.includes(entry.path) ? styles.entrySelected : {}),
+            }}
             onClick={() => handleClick(entry)}
             title={entry.path}
           >
+            {!entry.is_dir && onFileToggle && (
+              <input
+                type="checkbox"
+                checked={selectedFiles.includes(entry.path)}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  onFileToggle(entry.path);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                style={styles.checkbox}
+              />
+            )}
             <span style={styles.icon}>
               {entry.is_dir ? "📁" : getFileIcon(entry.name)}
             </span>
@@ -106,6 +116,13 @@ export function FileBrowser({ workingDir, onFileSelect }: FileBrowserProps) {
       </div>
     </div>
   );
+}
+
+function formatSize(bytes: number | null): string {
+  if (bytes === null) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function getFileIcon(name: string): string {
@@ -180,6 +197,14 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     fontSize: "13px",
     transition: "background 0.1s",
+  },
+  entrySelected: {
+    background: "var(--accent-muted, rgba(59, 130, 246, 0.1))",
+  },
+  checkbox: {
+    flexShrink: 0,
+    cursor: "pointer",
+    accentColor: "var(--accent)",
   },
   icon: {
     fontSize: "13px",

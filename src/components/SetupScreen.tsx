@@ -1,21 +1,45 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 
 interface SetupScreenProps {
   onSetup: (workingDir: string) => void;
+  defaultPath?: string;
 }
 
-export function SetupScreen({ onSetup }: SetupScreenProps) {
-  const [path, setPath] = useState("");
+export function SetupScreen({ onSetup, defaultPath = "" }: SetupScreenProps) {
+  const [path, setPath] = useState(defaultPath);
+  const [showManualInput, setShowManualInput] = useState(false);
+
+  // Update path when defaultPath arrives asynchronously
+  useEffect(() => {
+    if (defaultPath && !path) {
+      setPath(defaultPath);
+    }
+  }, [defaultPath]);
+
+  const trimmedPath = path.trim();
+  const canSubmit = trimmedPath.length > 0;
 
   const handleSubmit = () => {
-    if (path.trim()) {
-      onSetup(path.trim());
+    if (canSubmit) {
+      onSetup(trimmedPath);
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       handleSubmit();
+    }
+  };
+
+  const handleFolderSelect = async () => {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "作業フォルダを選択",
+    });
+    if (selected) {
+      setPath(selected);
     }
   };
 
@@ -32,23 +56,55 @@ export function SetupScreen({ onSetup }: SetupScreenProps) {
             作業フォルダを選んでください
           </label>
           <p style={styles.hint}>
-            Claudeが読み書きする対象のフォルダのパスを入力してください
+            Claudeが読み書きする対象のフォルダを選択してください
           </p>
-          <input
-            type="text"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="例: C:\Users\ユーザー名\Documents\仕事"
-            style={styles.input}
-            autoFocus
-          />
+
+          <button
+            onClick={handleFolderSelect}
+            style={styles.folderButton}
+            type="button"
+          >
+            <span style={styles.folderIcon} role="img" aria-label="フォルダ">
+              📁
+            </span>
+            <span>フォルダを選択</span>
+          </button>
+
+          {path && (
+            <div style={styles.selectedPath}>
+              <span style={styles.selectedPathLabel}>選択中:</span>
+              <span style={styles.selectedPathValue}>{path}</span>
+            </div>
+          )}
+
+          <div style={styles.manualToggleArea}>
+            <button
+              onClick={() => setShowManualInput(!showManualInput)}
+              style={styles.manualToggle}
+              type="button"
+            >
+              {showManualInput ? "手動入力を閉じる" : "または手動で入力"}
+            </button>
+          </div>
+
+          {showManualInput && (
+            <input
+              type="text"
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="例: C:\Users\ユーザー名\Documents\仕事"
+              style={styles.input}
+            />
+          )}
+
           <button
             onClick={handleSubmit}
-            disabled={!path.trim()}
+            disabled={!canSubmit}
             style={{
               ...styles.button,
-              opacity: path.trim() ? 1 : 0.5,
+              opacity: canSubmit ? 1 : 0.5,
+              cursor: canSubmit ? "pointer" : "default",
             }}
           >
             はじめる
@@ -101,7 +157,61 @@ const styles: Record<string, React.CSSProperties> = {
   hint: {
     fontSize: "12px",
     color: "var(--text-muted)",
-    marginBottom: "12px",
+    marginBottom: "16px",
+  },
+  folderButton: {
+    width: "100%",
+    padding: "20px",
+    background: "var(--bg-input)",
+    border: "2px dashed var(--border)",
+    borderRadius: "12px",
+    color: "var(--text-primary)",
+    fontSize: "16px",
+    fontWeight: 600,
+    fontFamily: "inherit",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "10px",
+    transition: "border-color 0.2s, background 0.2s",
+  },
+  folderIcon: {
+    fontSize: "24px",
+  },
+  selectedPath: {
+    marginTop: "12px",
+    padding: "10px 14px",
+    background: "var(--bg-input)",
+    borderRadius: "8px",
+    border: "1px solid var(--border)",
+    wordBreak: "break-all",
+  },
+  selectedPathLabel: {
+    fontSize: "11px",
+    color: "var(--text-muted)",
+    display: "block",
+    marginBottom: "4px",
+  },
+  selectedPathValue: {
+    fontSize: "13px",
+    color: "var(--text-secondary)",
+    fontFamily: "monospace",
+  },
+  manualToggleArea: {
+    textAlign: "center",
+    marginTop: "16px",
+    marginBottom: "16px",
+  },
+  manualToggle: {
+    background: "none",
+    border: "none",
+    color: "var(--text-muted)",
+    fontSize: "12px",
+    cursor: "pointer",
+    textDecoration: "underline",
+    fontFamily: "inherit",
+    padding: "4px 8px",
   },
   input: {
     width: "100%",

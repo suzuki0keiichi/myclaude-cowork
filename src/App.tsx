@@ -7,11 +7,12 @@ import { StreamingIndicator } from "./components/StreamingIndicator";
 import { SetupScreen } from "./components/SetupScreen";
 import { FileBrowser } from "./components/FileBrowser";
 import { TodoPanel } from "./components/TodoPanel";
-import { SkillManager } from "./components/SkillManager";
+import { CommandManager } from "./components/CommandManager";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { ApprovalDialog } from "./components/ApprovalDialog";
 import "./App.css";
 
-type SidebarTab = "files" | "skills" | "todos" | "settings";
+type SidebarTab = "files" | "commands" | "todos" | "settings";
 
 function App() {
   const {
@@ -20,32 +21,51 @@ function App() {
     isLoading,
     streamingText,
     workingDir,
+    lastWorkingDir,
     error,
+    pendingApproval,
     sendMessage,
     changeWorkingDir,
     clearMessages,
+    respondToApproval,
   } = useClaude();
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("files");
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingText]);
 
+  const handleFileToggle = (path: string) => {
+    setSelectedFiles((prev) =>
+      prev.includes(path)
+        ? prev.filter((p) => p !== path)
+        : [...prev, path]
+    );
+  };
+
   if (!workingDir) {
-    return <SetupScreen onSetup={changeWorkingDir} />;
+    return <SetupScreen onSetup={changeWorkingDir} defaultPath={lastWorkingDir} />;
   }
 
   return (
     <div className="app-layout">
-      {/* Left sidebar */}
+      {pendingApproval && (
+        <ApprovalDialog
+          description={pendingApproval.description}
+          details={pendingApproval.details}
+          onApprove={() => respondToApproval(true)}
+          onReject={() => respondToApproval(false)}
+        />
+      )}
+
       <aside className="sidebar">
         <div className="sidebar-header">
           <span className="logo">Cowork</span>
         </div>
 
-        {/* Tab switcher */}
         <div className="sidebar-tabs">
           <button
             className={`sidebar-tab ${sidebarTab === "files" ? "active" : ""}`}
@@ -54,10 +74,10 @@ function App() {
             📁 ファイル
           </button>
           <button
-            className={`sidebar-tab ${sidebarTab === "skills" ? "active" : ""}`}
-            onClick={() => setSidebarTab("skills")}
+            className={`sidebar-tab ${sidebarTab === "commands" ? "active" : ""}`}
+            onClick={() => setSidebarTab("commands")}
           >
-            ⚡ スキル
+            ⚡ コマンド
           </button>
           <button
             className={`sidebar-tab ${sidebarTab === "todos" ? "active" : ""}`}
@@ -73,7 +93,6 @@ function App() {
           </button>
         </div>
 
-        {/* Tab content */}
         <div className="sidebar-content">
           {sidebarTab === "files" && (
             <FileBrowser
@@ -81,10 +100,16 @@ function App() {
               onFileSelect={(path) =>
                 sendMessage(`このファイルの内容を確認して: ${path}`)
               }
+              selectedFiles={selectedFiles}
+              onFileToggle={handleFileToggle}
             />
           )}
-          {sidebarTab === "skills" && (
-            <SkillManager onExecuteSkill={sendMessage} />
+          {sidebarTab === "commands" && (
+            <CommandManager
+              workingDir={workingDir}
+              selectedFiles={selectedFiles}
+              onExecute={sendMessage}
+            />
           )}
           {sidebarTab === "todos" && <TodoPanel />}
           {sidebarTab === "settings" && <SettingsPanel />}
@@ -103,7 +128,6 @@ function App() {
         </div>
       </aside>
 
-      {/* Main chat area */}
       <main className="chat-main">
         <div className="chat-header">
           <span>チャット</span>
@@ -168,7 +192,6 @@ function App() {
         <ChatInput onSend={sendMessage} disabled={isLoading} />
       </main>
 
-      {/* Right activity panel */}
       <aside className="activity-sidebar">
         <ActivityPanel activities={activities} />
       </aside>

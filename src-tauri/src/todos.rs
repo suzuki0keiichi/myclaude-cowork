@@ -37,9 +37,9 @@ impl TodoManager {
         }
         let content = fs::read_to_string(&self.file_path)
             .await
-            .map_err(|e| format!("Failed to read todos: {}", e))?;
+            .map_err(|e| format!("TODOリストを読み込めませんでした: {}", e))?;
         let store: TodoStore = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse todos: {}", e))?;
+            .map_err(|e| format!("TODOリストの形式が正しくありません: {}", e))?;
         let mut items = self.items.lock().await;
         *items = store.items;
         Ok(())
@@ -49,17 +49,17 @@ impl TodoManager {
         if let Some(parent) = self.file_path.parent() {
             fs::create_dir_all(parent)
                 .await
-                .map_err(|e| format!("Failed to create dir: {}", e))?;
+                .map_err(|e| format!("フォルダを作成できませんでした: {}", e))?;
         }
         let items = self.items.lock().await;
         let store = TodoStore {
             items: items.clone(),
         };
         let content = serde_json::to_string_pretty(&store)
-            .map_err(|e| format!("Failed to serialize todos: {}", e))?;
+            .map_err(|e| format!("TODOリストの保存に失敗しました: {}", e))?;
         fs::write(&self.file_path, content)
             .await
-            .map_err(|e| format!("Failed to write todos: {}", e))
+            .map_err(|e| format!("TODOリストを書き込めませんでした: {}", e))
     }
 
     pub async fn list(&self) -> Vec<TodoItem> {
@@ -111,6 +111,7 @@ impl TodoManager {
         Ok(removed)
     }
 
+    #[allow(dead_code)]
     pub async fn update_text(&self, id: &str, text: String) -> Result<Option<TodoItem>, String> {
         let updated = {
             let mut items = self.items.lock().await;
@@ -131,7 +132,6 @@ impl TodoManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn temp_manager() -> TodoManager {
         let dir = std::env::temp_dir().join(format!("cowork-test-{}", uuid::Uuid::new_v4()));

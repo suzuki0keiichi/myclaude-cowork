@@ -1,12 +1,22 @@
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
+use crate::approval_server;
 use crate::translator::translate_tool_event;
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+}
 
 /// A single message in the chat history (sent to frontend)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,13 +109,19 @@ pub enum ContentBlock {
 pub struct ClaudeManager {
     session_id: Arc<Mutex<Option<String>>>,
     working_dir: Mutex<String>,
+    approval_port: Arc<Mutex<Option<u16>>>,
+    approval_pending: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
 }
 
 impl ClaudeManager {
-    pub fn new() -> Self {
+    pub fn new(
+        approval_pending: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+    ) -> Self {
         Self {
             session_id: Arc::new(Mutex::new(None)),
             working_dir: Mutex::new(String::new()),
+            approval_port: Arc::new(Mutex::new(None)),
+            approval_pending,
         }
     }
 
@@ -118,6 +134,110 @@ impl ClaudeManager {
         *wd = dir;
     }
 
+    pub async fn reset_session(&self) {
+        let mut s = self.session_id.lock().await;
+        *s = None;
+    }
+
+    /// Ensure the approval server is running, return port
+    async fn ensure_approval_server(&self, app: &AppHandle) -> Result<u16, String> {
+        let mut port_guard = self.approval_port.lock().await;
+        if let Some(port) = *port_guard {
+            return Ok(port);
+        }
+        let port = approval_server::start_approval_server(
+            app.clone(),
+            Arc::clone(&self.approval_pending),
+        ).await?;
+        *port_guard = Some(port);
+        Ok(port)
+    }
+
+    /// Install the hook script and configure Claude Code settings
+    pub fn ensure_hook_installed(app: &AppHandle) -> Result<PathBuf, String> {
+        let data_dir = app.path().app_data_dir()
+            .map_err(|e| format!("アプリデータディレクトリ取得エラー: {}", e))?;
+        std::fs::create_dir_all(&data_dir)
+            .map_err(|e| format!("ディレクトリ作成エラー: {}", e))?;
+
+        // Copy hook script to app data directory
+        let hook_dest = data_dir.join("cowork-hook.cjs");
+        let hook_source = include_str!("../resources/cowork-hook.cjs");
+        std::fs::write(&hook_dest, hook_source)
+            .map_err(|e| format!("hookスクリプト書き込みエラー: {}", e))?;
+
+        // Configure Claude Code settings
+        let home = home_dir().ok_or("ホームディレクトリが見つかりません")?;
+        let claude_dir = home.join(".claude");
+        let settings_path = claude_dir.join("settings.json");
+
+        // Read existing settings or create new
+        let mut settings: serde_json::Value = if settings_path.exists() {
+            let content = std::fs::read_to_string(&settings_path)
+                .map_err(|e| format!("settings.json読み込みエラー: {}", e))?;
+            serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+        } else {
+            std::fs::create_dir_all(&claude_dir)
+                .map_err(|e| format!(".claudeディレクトリ作成エラー: {}", e))?;
+            serde_json::json!({})
+        };
+
+        // Build the hook command
+        let hook_command = format!("node {}", hook_dest.to_string_lossy().replace('\\', "\\\\"));
+
+        // Check if hook is already configured
+        let already_configured = settings.get("hooks")
+            .and_then(|h| h.get("PreToolUse"))
+            .and_then(|p| p.as_array())
+            .map(|arr| arr.iter().any(|item| {
+                item.get("hooks")
+                    .and_then(|h| h.as_array())
+                    .map(|hooks| hooks.iter().any(|hook| {
+                        hook.get("command")
+                            .and_then(|c| c.as_str())
+                            .map(|c| c.contains("cowork-hook"))
+                            .unwrap_or(false)
+                    }))
+                    .unwrap_or(false)
+            }))
+            .unwrap_or(false);
+
+        if !already_configured {
+            // Backup existing settings
+            if settings_path.exists() {
+                let backup_path = claude_dir.join("settings.json.cowork-backup");
+                let _ = std::fs::copy(&settings_path, &backup_path);
+            }
+
+            // Add hook configuration
+            let hook_config = serde_json::json!({
+                "matcher": "",
+                "hooks": [{
+                    "type": "command",
+                    "command": hook_command
+                }]
+            });
+
+            let hooks = settings.as_object_mut().unwrap()
+                .entry("hooks")
+                .or_insert_with(|| serde_json::json!({}));
+            let pre_tool_use = hooks.as_object_mut().unwrap()
+                .entry("PreToolUse")
+                .or_insert_with(|| serde_json::json!([]));
+
+            if let Some(arr) = pre_tool_use.as_array_mut() {
+                arr.push(hook_config);
+            }
+
+            std::fs::write(&settings_path, serde_json::to_string_pretty(&settings).unwrap())
+                .map_err(|e| format!("settings.json書き込みエラー: {}", e))?;
+
+            log::info!("Cowork hook installed in {}", settings_path.display());
+        }
+
+        Ok(hook_dest)
+    }
+
     /// Send a user message to Claude Code and stream the response
     pub async fn send_message(
         &self,
@@ -126,8 +246,11 @@ impl ClaudeManager {
     ) -> Result<(), String> {
         let working_dir = self.working_dir.lock().await.clone();
         if working_dir.is_empty() {
-            return Err("Working directory not set".to_string());
+            return Err("作業フォルダが設定されていません".to_string());
         }
+
+        // Ensure approval server is running
+        let approval_port = self.ensure_approval_server(app).await?;
 
         // Build command args
         let mut args = vec![
@@ -146,20 +269,21 @@ impl ClaudeManager {
 
         args.push(message);
 
-        log::info!("Spawning claude with args: {:?}", args);
+        log::info!("Spawning claude with args: {:?}, approval_port: {}", args, approval_port);
 
-        // Spawn claude process
+        // Spawn claude process with approval port environment variable
         let mut child = Command::new("claude")
             .args(&args)
             .current_dir(&working_dir)
+            .env("COWORK_APPROVAL_PORT", approval_port.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("Failed to spawn claude: {}", e))?;
+            .map_err(|e| format!("Claude Codeを起動できませんでした: {}", e))?;
 
-        let stdout = child.stdout.take().ok_or("No stdout")?;
-        let stderr = child.stderr.take().ok_or("No stderr")?;
+        let stdout = child.stdout.take().ok_or("Claude Codeの出力を取得できませんでした")?;
+        let stderr = child.stderr.take().ok_or("Claude Codeのエラー出力を取得できませんでした")?;
 
         // Read stdout line by line (NDJSON)
         let app_handle = app.clone();
@@ -285,7 +409,7 @@ impl ClaudeManager {
         });
 
         // Wait for process to finish
-        let status = child.wait().await.map_err(|e| format!("Process error: {}", e))?;
+        let status = child.wait().await.map_err(|e| format!("プロセスエラー: {}", e))?;
         let _ = stdout_task.await;
         let _ = stderr_task.await;
 
@@ -303,8 +427,6 @@ impl ClaudeManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
     // ── ClaudeStreamEvent deserialization ──
 
     #[test]
@@ -481,7 +603,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_working_dir() {
-        let mgr = ClaudeManager::new();
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let mgr = ClaudeManager::new(pending);
         assert_eq!(mgr.get_working_dir().await, "");
 
         mgr.set_working_dir("/tmp/test".to_string()).await;
@@ -490,7 +613,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_working_dir_change() {
-        let mgr = ClaudeManager::new();
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let mgr = ClaudeManager::new(pending);
         mgr.set_working_dir("/first".to_string()).await;
         mgr.set_working_dir("/second".to_string()).await;
         assert_eq!(mgr.get_working_dir().await, "/second");

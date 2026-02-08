@@ -13,18 +13,19 @@ name = "cowork_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.5.4" }
+tauri-build = { version = "2.5.4", features = [] }
 
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.10.0" }
+tauri = { version = "2.10.0", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
-open = "5"
+tauri-plugin-dialog = "2"
+axum = "0.7"
+regex-lite = "0.1"

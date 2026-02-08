@@ -1,27 +1,31 @@
+mod approval_server;
 mod claude;
+mod commands;
 mod files;
 mod gdrive;
-mod skills;
+mod oauth_server;
 mod slack;
 mod todos;
 mod translator;
 
 use claude::{ChatMessage, ClaudeManager};
+use commands::{CommandStore, CoworkCommand};
 use files::FileEntry;
-use gdrive::{DriveFile, GDriveClient, GDriveConfig};
-use skills::{Skill, SkillStore};
-use slack::{SlackClient, SlackConfig, SlackListItem};
+use gdrive::{DriveFile, GDriveClient};
+use slack::{SlackClient, SlackListItem, SlackSettings};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use todos::{TodoItem, TodoManager};
+use tokio::sync::{Mutex, oneshot};
 
 type ClaudeState = Arc<ClaudeManager>;
-type SkillState = Arc<SkillStore>;
-type TodoState = Arc<TodoManager>;
-type SlackState = Arc<SlackClient>;
+type CommandState = Arc<CommandStore>;
 type GDriveState = Arc<GDriveClient>;
+type SlackState = Arc<SlackClient>;
+type TodoState = Arc<TodoManager>;
+type ApprovalPendingState = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
 
 // ── Claude commands ──
 
@@ -43,18 +47,62 @@ async fn send_message(
 
 #[tauri::command]
 async fn set_working_directory(
+    app: AppHandle,
     state: State<'_, ClaudeState>,
+    command_state: State<'_, CommandState>,
     path: String,
 ) -> Result<(), String> {
-    state.set_working_dir(path).await;
+    state.set_working_dir(path.clone()).await;
+    command_state.set_working_dir(path.clone()).await;
+
+    if !path.is_empty() {
+        if let Err(e) = save_last_working_dir(&app, &path).await {
+            log::warn!("Failed to save working dir: {}", e);
+        }
+
+        match command_state.migrate_legacy_skills().await {
+            Ok(count) if count > 0 => {
+                log::info!("Migrated {} legacy skills to commands format", count);
+                let msg = ChatMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    role: "system".to_string(),
+                    content: format!("{}件のスキルをコマンド形式に移行しました", count),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                };
+                let _ = app.emit("claude:message", &msg);
+            }
+            Err(e) => {
+                log::warn!("Legacy skill migration failed: {}", e);
+            }
+            _ => {}
+        }
+    }
+
     Ok(())
 }
 
 #[tauri::command]
-async fn get_working_directory(
-    state: State<'_, ClaudeState>,
-) -> Result<String, String> {
+async fn get_working_directory(state: State<'_, ClaudeState>) -> Result<String, String> {
     Ok(state.get_working_dir().await)
+}
+
+#[tauri::command]
+async fn respond_to_approval(
+    state: State<'_, ApprovalPendingState>,
+    approval_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    let tx = {
+        let mut pending = state.lock().await;
+        pending.remove(&approval_id)
+    };
+
+    if let Some(tx) = tx {
+        let _ = tx.send(approved);
+        Ok(())
+    } else {
+        Err(format!("承認リクエストが見つかりません: {}", approval_id))
+    }
 }
 
 // ── File browser commands ──
@@ -69,58 +117,59 @@ async fn get_file_tree(path: String) -> Result<FileEntry, String> {
     files::get_file_tree(&path).await
 }
 
-// ── Skill commands ──
+// ── Command commands ──
 
 #[tauri::command]
-async fn list_skills(state: State<'_, SkillState>) -> Result<Vec<Skill>, String> {
+async fn list_commands(state: State<'_, CommandState>) -> Result<Vec<CoworkCommand>, String> {
     state.list().await
 }
 
 #[tauri::command]
-async fn save_skill(state: State<'_, SkillState>, skill: Skill) -> Result<(), String> {
-    state.save(&skill).await
+async fn save_command(
+    state: State<'_, CommandState>,
+    command: CoworkCommand,
+) -> Result<(), String> {
+    state.save(&command).await
 }
 
 #[tauri::command]
-async fn delete_skill(state: State<'_, SkillState>, id: String) -> Result<(), String> {
-    state.delete(&id).await
+async fn delete_command(state: State<'_, CommandState>, name: String) -> Result<(), String> {
+    state.delete(&name).await
 }
 
 #[tauri::command]
-async fn execute_skill(
+async fn execute_command(
     app: AppHandle,
     claude_state: State<'_, ClaudeState>,
-    skill_state: State<'_, SkillState>,
-    skill_id: String,
-    params: HashMap<String, String>,
+    name: String,
+    context: String,
 ) -> Result<(), String> {
-    let skill = skill_state
-        .get(&skill_id)
-        .await?
-        .ok_or_else(|| format!("Skill not found: {}", skill_id))?;
-
-    let prompt = skills::expand_template(&skill.prompt_template, &params);
+    let message = if context.is_empty() {
+        format!("/{}", name)
+    } else {
+        format!("/{} {}", name, context)
+    };
 
     let user_msg = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         role: "user".to_string(),
-        content: format!("⚡ スキル実行: {}\n{}", skill.name, prompt),
+        content: message.clone(),
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
     let _ = app.emit("claude:message", &user_msg);
 
-    claude_state.send_message(&app, prompt).await
+    claude_state.send_message(&app, message).await
 }
 
 // ── TODO commands ──
 
 #[tauri::command]
-async fn list_todos(state: State<'_, TodoState>) -> Result<Vec<TodoItem>, String> {
+async fn todo_list(state: State<'_, TodoState>) -> Result<Vec<TodoItem>, String> {
     Ok(state.list().await)
 }
 
 #[tauri::command]
-async fn add_todo(
+async fn todo_add(
     state: State<'_, TodoState>,
     text: String,
     due_date: Option<String>,
@@ -129,7 +178,7 @@ async fn add_todo(
 }
 
 #[tauri::command]
-async fn toggle_todo(
+async fn todo_toggle(
     state: State<'_, TodoState>,
     id: String,
 ) -> Result<Option<TodoItem>, String> {
@@ -137,8 +186,79 @@ async fn toggle_todo(
 }
 
 #[tauri::command]
-async fn remove_todo(state: State<'_, TodoState>, id: String) -> Result<bool, String> {
+async fn todo_remove(state: State<'_, TodoState>, id: String) -> Result<bool, String> {
     state.remove(&id).await
+}
+
+// ── Google Drive commands ──
+
+#[tauri::command]
+async fn gdrive_is_configured(state: State<'_, GDriveState>) -> Result<bool, String> {
+    Ok(state.is_configured().await)
+}
+
+#[tauri::command]
+async fn gdrive_is_authenticated(state: State<'_, GDriveState>) -> Result<bool, String> {
+    Ok(state.is_authenticated().await)
+}
+
+/// Start the OAuth flow: returns the auth URL for the frontend to open.
+/// A background task waits for the callback and emits events on completion.
+#[tauri::command]
+async fn gdrive_start_auth(
+    app: AppHandle,
+    state: State<'_, GDriveState>,
+) -> Result<String, String> {
+    let (url, port, rx) = state.start_auth_flow().await?;
+
+    let gdrive = state.inner().clone();
+    let app_clone = app.clone();
+    tokio::spawn(async move {
+        let result = tokio::time::timeout(std::time::Duration::from_secs(300), rx).await;
+        match result {
+            Ok(Ok(Ok(code))) => match gdrive.exchange_code(&code, port).await {
+                Ok(()) => {
+                    let _ = app_clone.emit("gdrive:auth_complete", ());
+                }
+                Err(e) => {
+                    let _ = app_clone.emit("gdrive:auth_error", &e);
+                }
+            },
+            Ok(Ok(Err(e))) => {
+                let _ = app_clone.emit("gdrive:auth_error", &e);
+            }
+            Ok(Err(_)) => {
+                let _ = app_clone.emit("gdrive:auth_error", "認証がキャンセルされました");
+            }
+            Err(_) => {
+                let _ = app_clone.emit("gdrive:auth_error", "認証がタイムアウトしました（5分）");
+            }
+        }
+    });
+
+    Ok(url)
+}
+
+#[tauri::command]
+async fn gdrive_logout(state: State<'_, GDriveState>) -> Result<(), String> {
+    state.logout().await
+}
+
+#[tauri::command]
+async fn gdrive_list_files(
+    state: State<'_, GDriveState>,
+    folder_id: Option<String>,
+) -> Result<Vec<DriveFile>, String> {
+    state.list_files(folder_id.as_deref()).await
+}
+
+#[tauri::command]
+async fn gdrive_download_file(
+    state: State<'_, GDriveState>,
+    file_id: String,
+    dest: String,
+) -> Result<String, String> {
+    state.download_file(&file_id, &dest).await
 }
 
 // ── Slack commands ──
@@ -149,16 +269,67 @@ async fn slack_is_configured(state: State<'_, SlackState>) -> Result<bool, Strin
 }
 
 #[tauri::command]
-async fn slack_get_config(state: State<'_, SlackState>) -> Result<Option<SlackConfig>, String> {
-    Ok(state.get_config().await)
+async fn slack_is_authenticated(state: State<'_, SlackState>) -> Result<bool, String> {
+    Ok(state.is_authenticated().await)
 }
 
 #[tauri::command]
-async fn slack_save_config(
+async fn slack_get_team_name(state: State<'_, SlackState>) -> Result<Option<String>, String> {
+    Ok(state.get_team_name().await)
+}
+
+#[tauri::command]
+async fn slack_get_settings(state: State<'_, SlackState>) -> Result<SlackSettings, String> {
+    Ok(state.get_settings().await)
+}
+
+#[tauri::command]
+async fn slack_save_settings(
     state: State<'_, SlackState>,
-    config: SlackConfig,
+    settings: SlackSettings,
 ) -> Result<(), String> {
-    state.save_config(config).await
+    state.save_settings(settings).await
+}
+
+/// Start Slack OAuth flow. Returns the auth URL.
+#[tauri::command]
+async fn slack_start_auth(
+    app: AppHandle,
+    state: State<'_, SlackState>,
+) -> Result<String, String> {
+    let (url, port, rx) = state.start_auth_flow().await?;
+
+    let slack = state.inner().clone();
+    let app_clone = app.clone();
+    tokio::spawn(async move {
+        let result = tokio::time::timeout(std::time::Duration::from_secs(300), rx).await;
+        match result {
+            Ok(Ok(Ok(code))) => match slack.exchange_code(&code, port).await {
+                Ok(()) => {
+                    let _ = app_clone.emit("slack:auth_complete", ());
+                }
+                Err(e) => {
+                    let _ = app_clone.emit("slack:auth_error", &e);
+                }
+            },
+            Ok(Ok(Err(e))) => {
+                let _ = app_clone.emit("slack:auth_error", &e);
+            }
+            Ok(Err(_)) => {
+                let _ = app_clone.emit("slack:auth_error", "認証がキャンセルされました");
+            }
+            Err(_) => {
+                let _ = app_clone.emit("slack:auth_error", "認証がタイムアウトしました（5分）");
+            }
+        }
+    });
+
+    Ok(url)
+}
+
+#[tauri::command]
+async fn slack_logout(state: State<'_, SlackState>) -> Result<(), String> {
+    state.logout().await
 }
 
 #[tauri::command]
@@ -178,60 +349,77 @@ async fn slack_create_item(
     state.create_item(&list_id, &title).await
 }
 
-// ── Google Drive commands ──
+// ── Working directory persistence ──
 
 #[tauri::command]
-async fn gdrive_is_configured(state: State<'_, GDriveState>) -> Result<bool, String> {
-    Ok(state.is_configured().await)
-}
-
-#[tauri::command]
-async fn gdrive_is_authenticated(state: State<'_, GDriveState>) -> Result<bool, String> {
-    Ok(state.is_authenticated().await)
-}
-
-#[tauri::command]
-async fn gdrive_save_config(
-    state: State<'_, GDriveState>,
-    config: GDriveConfig,
-) -> Result<(), String> {
-    state.save_config(config).await
-}
-
-#[tauri::command]
-async fn gdrive_get_auth_url(
-    state: State<'_, GDriveState>,
-    redirect_port: u16,
-) -> Result<String, String> {
-    state.get_auth_url(redirect_port).await
-}
-
-#[tauri::command]
-async fn gdrive_exchange_code(
-    state: State<'_, GDriveState>,
-    code: String,
-    redirect_port: u16,
-) -> Result<(), String> {
-    state.exchange_code(&code, redirect_port).await
-}
-
-#[tauri::command]
-async fn gdrive_list_files(
-    state: State<'_, GDriveState>,
-    folder_id: Option<String>,
-) -> Result<Vec<DriveFile>, String> {
-    state
-        .list_files(folder_id.as_deref())
+async fn get_last_working_dir(app: AppHandle) -> Result<String, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let path = data_dir.join("last_working_dir.txt");
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    tokio::fs::read_to_string(&path)
         .await
+        .map_err(|e| format!("前回の作業フォルダの読み込みに失敗: {}", e))
+}
+
+async fn save_last_working_dir(app: &AppHandle, dir: &str) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(&data_dir)
+        .await
+        .map_err(|e| format!("ディレクトリ作成に失敗: {}", e))?;
+    let path = data_dir.join("last_working_dir.txt");
+    tokio::fs::write(&path, dir)
+        .await
+        .map_err(|e| format!("作業フォルダの保存に失敗: {}", e))
+}
+
+// ── Chat history commands ──
+
+#[tauri::command]
+async fn chat_load_messages(app: AppHandle) -> Result<Vec<ChatMessage>, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let path = data_dir.join("chat_messages.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| format!("チャット履歴の読み込みに失敗: {}", e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("チャット履歴の解析に失敗: {}", e))
 }
 
 #[tauri::command]
-async fn gdrive_download_file(
-    state: State<'_, GDriveState>,
-    file_id: String,
-    dest: String,
-) -> Result<String, String> {
-    state.download_file(&file_id, &dest).await
+async fn chat_save_messages(app: AppHandle, messages: Vec<ChatMessage>) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(&data_dir)
+        .await
+        .map_err(|e| format!("ディレクトリ作成に失敗: {}", e))?;
+    let path = data_dir.join("chat_messages.json");
+    let content = serde_json::to_string(&messages)
+        .map_err(|e| format!("チャット履歴のシリアライズに失敗: {}", e))?;
+    tokio::fs::write(&path, content)
+        .await
+        .map_err(|e| format!("チャット履歴の保存に失敗: {}", e))
+}
+
+#[tauri::command]
+async fn chat_clear_messages(app: AppHandle) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let path = data_dir.join("chat_messages.json");
+    if path.exists() {
+        tokio::fs::remove_file(&path)
+            .await
+            .map_err(|e| format!("チャット履歴の削除に失敗: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn reset_session(state: State<'_, ClaudeState>) -> Result<(), String> {
+    state.reset_session().await;
+    Ok(())
 }
 
 // ── App setup ──
@@ -242,39 +430,58 @@ fn get_app_data_dir(app: &tauri::App) -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from(".cowork"))
 }
 
+fn get_resource_dir(app: &tauri::App) -> Option<PathBuf> {
+    app.path().resource_dir().ok()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let claude_manager = Arc::new(ClaudeManager::new());
+    let approval_pending: ApprovalPendingState = Arc::new(Mutex::new(HashMap::new()));
+    let claude_manager = Arc::new(ClaudeManager::new(Arc::clone(&approval_pending)));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(claude_manager)
+        .manage(approval_pending)
         .invoke_handler(tauri::generate_handler![
             send_message,
             set_working_directory,
             get_working_directory,
             list_files,
             get_file_tree,
-            list_skills,
-            save_skill,
-            delete_skill,
-            execute_skill,
-            list_todos,
-            add_todo,
-            toggle_todo,
-            remove_todo,
-            slack_is_configured,
-            slack_get_config,
-            slack_save_config,
-            slack_list_items,
-            slack_create_item,
+            list_commands,
+            save_command,
+            delete_command,
+            execute_command,
+            todo_list,
+            todo_add,
+            todo_toggle,
+            todo_remove,
+            // Google Drive
             gdrive_is_configured,
             gdrive_is_authenticated,
-            gdrive_save_config,
-            gdrive_get_auth_url,
-            gdrive_exchange_code,
+            gdrive_start_auth,
+            gdrive_logout,
             gdrive_list_files,
             gdrive_download_file,
+            // Slack
+            slack_is_configured,
+            slack_is_authenticated,
+            slack_get_team_name,
+            slack_get_settings,
+            slack_save_settings,
+            slack_start_auth,
+            slack_logout,
+            slack_list_items,
+            slack_create_item,
+            // Other
+            respond_to_approval,
+            get_last_working_dir,
+            chat_load_messages,
+            chat_save_messages,
+            chat_clear_messages,
+            reset_session,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -286,10 +493,16 @@ pub fn run() {
             }
 
             let data_dir = get_app_data_dir(app);
+            let resource_dir = get_resource_dir(app);
 
-            // Initialize skill store
-            let skill_store = Arc::new(SkillStore::new(data_dir.clone()));
-            app.manage(skill_store);
+            // Install hook for Claude Code approval flow
+            if let Err(e) = ClaudeManager::ensure_hook_installed(app.handle()) {
+                log::warn!("Hook installation failed: {}", e);
+            }
+
+            // Initialize command store
+            let command_store = Arc::new(CommandStore::new(data_dir.clone()));
+            app.manage(command_store);
 
             // Initialize todo manager
             let todo_manager = Arc::new(TodoManager::new(data_dir.clone()));
@@ -299,21 +512,22 @@ pub fn run() {
             });
             app.manage(todo_manager);
 
-            // Initialize Slack client
-            let slack_client = Arc::new(SlackClient::new(data_dir.clone()));
-            let slack_ref = slack_client.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = slack_ref.load_config().await;
-            });
-            app.manage(slack_client);
-
             // Initialize Google Drive client
-            let gdrive_client = Arc::new(GDriveClient::new(data_dir));
+            let gdrive_client =
+                Arc::new(GDriveClient::new(data_dir.clone(), resource_dir.clone()));
             let gdrive_ref = gdrive_client.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = gdrive_ref.load().await;
             });
             app.manage(gdrive_client);
+
+            // Initialize Slack client
+            let slack_client = Arc::new(SlackClient::new(data_dir, resource_dir));
+            let slack_ref = slack_client.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = slack_ref.load().await;
+            });
+            app.manage(slack_client);
 
             Ok(())
         })

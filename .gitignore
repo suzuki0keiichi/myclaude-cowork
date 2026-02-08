@@ -21,3 +21,7 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# OAuth credentials (developer-specific, not for git)
+src-tauri/resources/gdrive_oauth.json
+src-tauri/resources/slack_oauth.json
