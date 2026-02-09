@@ -30,7 +30,7 @@
 | フロントエンド | React + TypeScript                                | コンポーネント設計、型安全                 |
 | Claude連携     | `claude -p --output-format stream-json --verbose` | 構造化ストリーム出力                       |
 | セッション継続 | `--resume` + session_id保存                       | 会話の継続性                               |
-| ビルド         | pnpm, GitHub Actions                              | Windows MSI/NSISインストーラー自動生成     |
+| ビルド         | pnpm, GitHub Actions                              | Windows MSI/NSIS, macOS DMG, Linux deb/AppImage 自動生成 |
 
 ## システムアーキテクチャ
 
