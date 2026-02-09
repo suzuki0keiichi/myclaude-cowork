@@ -92,6 +92,36 @@ export function CommandManager({ workingDir, selectedFiles, onExecute }: Command
     }
   };
 
+  const startChatCreation = () => {
+    const prompt = [
+      "ユーザーが繰り返し使えるコマンド（自動化手順）を新しく作りたいと言っています。",
+      "以下の手順で対話的にコマンドを作成してください。",
+      "",
+      "## 進め方",
+      "",
+      "1. まずユーザーに「どんな作業を自動化したいですか？」と聞いてください。",
+      "2. ユーザーの回答をもとに、あなたの理解を **Mermaid形式のフローチャート** で示してください。",
+      "   - ```mermaid で囲んでください（このアプリはMermaid図を描画できます）",
+      "   - フローチャートには処理の流れ、条件分岐、入出力を含めてください",
+      "   - ノードのラベルは日本語で書いてください",
+      "3. 「この理解で合っていますか？修正したい点があれば教えてください」と確認してください。",
+      "4. ユーザーがOKと言うまで 2-3 を繰り返してください。",
+      "5. 確定したら、.claude/commands/ にコマンドファイル（.md）をWriteツールで書き込んでください。",
+      "   - ファイル名は日本語OK（例: 請求書振り分け.md）",
+      "   - YAML frontmatter に description を入れてください",
+      "   - 本文は、Claudeへの指示として機能するプロンプトにしてください",
+      "   - 実行時にファイルリストなど追加情報が渡される場合は $ARGUMENTS を使ってください",
+      "",
+      "## 注意",
+      "",
+      "- ユーザーはプログラミングの知識がありません。専門用語は避けてください。",
+      "- フローチャートで「こういうことですよね？」と確認するのが最も重要なステップです。",
+      "- コマンド名は分かりやすい日本語にしてください。",
+    ].join("\n");
+
+    onExecute(prompt);
+  };
+
   // Command execution dialog
   if (selectedCommand) {
     return (
@@ -255,13 +285,18 @@ export function CommandManager({ workingDir, selectedFiles, onExecute }: Command
           <div style={styles.empty}>
             コマンドはまだありません。
             <br />
-            よく使う操作を登録しましょう。
+            「チャットで作る」から、やりたいことを
+            <br />
+            話すだけでコマンドを作れます。
           </div>
         )}
       </div>
       <div style={styles.footer}>
-        <button onClick={() => setShowForm(true)} style={styles.newButton}>
-          + 新しいコマンド
+        <button onClick={startChatCreation} style={styles.chatCreateButton}>
+          + チャットで作る
+        </button>
+        <button onClick={() => setShowForm(true)} style={styles.manualCreateButton}>
+          自分で書く
         </button>
       </div>
     </div>
@@ -419,15 +454,29 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8px 12px",
     borderTop: "1px solid var(--border)",
   },
-  newButton: {
+  chatCreateButton: {
     width: "100%",
-    padding: "6px",
-    background: "var(--bg-input)",
-    border: "1px solid var(--border)",
+    padding: "8px",
+    background: "var(--accent)",
+    border: "none",
     borderRadius: "6px",
-    color: "var(--text-secondary)",
+    color: "white",
     fontSize: "12px",
+    fontWeight: 600,
     cursor: "pointer",
     fontFamily: "inherit",
+    marginBottom: "4px",
+  },
+  manualCreateButton: {
+    width: "100%",
+    padding: "6px",
+    background: "none",
+    border: "none",
+    borderRadius: "6px",
+    color: "var(--text-muted)",
+    fontSize: "11px",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    textDecoration: "underline" as const,
   },
 };
