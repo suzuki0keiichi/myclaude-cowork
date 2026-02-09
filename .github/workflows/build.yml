@@ -1,10 +1,9 @@
 name: Build & Test
 
+# NOTE: 開発中はコスト節約のため手動実行のみ。
+# リリース準備ができたら push/pull_request トリガーに戻すこと。
 on:
-  push:
-    branches: [main, claude/*]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
