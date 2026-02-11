@@ -3,11 +3,14 @@ import { useState, useRef, useEffect } from "react";
 interface ChatInputProps {
   onSend: (message: string) => void;
   disabled: boolean;
+  isLoading?: boolean;
+  onCancel?: () => void;
 }
 
-export function ChatInput({ onSend, disabled }: ChatInputProps) {
+export function ChatInput({ onSend, disabled, isLoading, onCancel }: ChatInputProps) {
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
 
   useEffect(() => {
     if (!disabled && textareaRef.current) {
@@ -25,8 +28,19 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
     }
   };
 
+  const handleCompositionStart = () => {
+    composingRef.current = true;
+  };
+
+  const handleCompositionEnd = () => {
+    // Delay to ensure the final Enter keydown fires while still "composing"
+    setTimeout(() => {
+      composingRef.current = false;
+    }, 50);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !composingRef.current && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSubmit();
     }
@@ -48,6 +62,8 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           value={input}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
+          onCompositionStart={handleCompositionStart}
+          onCompositionEnd={handleCompositionEnd}
           placeholder={disabled ? "応答を待っています..." : "メッセージを入力..."}
           disabled={disabled}
           rows={1}
@@ -56,16 +72,25 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
             opacity: disabled ? 0.6 : 1,
           }}
         />
-        <button
-          onClick={handleSubmit}
-          disabled={disabled || !input.trim()}
-          style={{
-            ...styles.sendButton,
-            opacity: disabled || !input.trim() ? 0.4 : 1,
-          }}
-        >
-          送信
-        </button>
+        {isLoading && onCancel ? (
+          <button
+            onClick={onCancel}
+            style={styles.cancelButton}
+          >
+            中止
+          </button>
+        ) : (
+          <button
+            onClick={handleSubmit}
+            disabled={disabled || !input.trim()}
+            style={{
+              ...styles.sendButton,
+              opacity: disabled || !input.trim() ? 0.4 : 1,
+            }}
+          >
+            送信
+          </button>
+        )}
       </div>
     </div>
   );
@@ -100,6 +125,18 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sendButton: {
     background: "var(--accent)",
+    color: "white",
+    border: "none",
+    borderRadius: "8px",
+    padding: "6px 16px",
+    fontSize: "13px",
+    fontWeight: 600,
+    cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+    flexShrink: 0,
+  },
+  cancelButton: {
+    background: "#dc3545",
     color: "white",
     border: "none",
     borderRadius: "8px",

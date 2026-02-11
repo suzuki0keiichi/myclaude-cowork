@@ -1,73 +1,52 @@
-# React + TypeScript + Vite
+# Cowork
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Claude Code の機能を、ターミナルを使わずにデスクトップアプリとして利用できる GUI ラッパーです。
+Claude CoworkがWindowsで出てこなくて腹たったので作りました。多分すぐ出ると思うのでそれまでの間だけです。
 
-Currently, two official plugins are available:
+Windows / macOS / Linux に対応しています。
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## WIP (Work In Progress)
 
-## React Compiler
+**このプロジェクトは開発初期段階です。** 多くの機能が未実装または不安定な状態にあります。
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+動作する機能:
 
-## Expanding the ESLint configuration
+- Claude Code とのチャット（ストリーミング表示）
+- ツール実行状況の日本語リアルタイム表示
+- セッション継続（会話の永続化）
+- ファイルブラウザ
+- スキル管理（作成・実行・削除）
+- Slack / Google Drive の OAuth 認証
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+まだ動かない・不安定な機能:
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- 承認ダイアログ（Claude Code との接続が不完全）
+- Google Drive ファイル操作の UI
+- Slack リストとの TODO 同期
+- その他、[docs/features.md](docs/features.md) を参照
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## 概要
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+Claude Code は強力な CLI ツールですが、ターミナル操作に馴染みのないユーザーにとっては敷居が高いものです。Cowork は Claude Code の CLI を内部的にラップし、以下を提供します:
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+- **チャット UI** -- Claude との対話をメッセージアプリのように表示
+- **ツール実行の可視化** -- Bash, Read, Write 等のツール呼び出しを日本語に翻訳してリアルタイム表示
+- **承認の日本語化** -- ファイル削除やコマンド実行の権限確認を分かりやすく表示
+- **スキル** -- よく使う手順を Claude Code スキルとして保存・ワンクリック実行
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## 技術スタック
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+| レイヤー       | 技術                                 |
+| -------------- | ------------------------------------ |
+| フレームワーク | Tauri v2                             |
+| バックエンド   | Rust                                 |
+| フロントエンド | React + TypeScript                   |
+| Claude 連携    | `claude --output-format stream-json` |
+
+## セットアップ
+
+[INSTALL.md](INSTALL.md) を参照してください。
+
+## ライセンス
+
+[BSD 3-Clause License](LICENSE)

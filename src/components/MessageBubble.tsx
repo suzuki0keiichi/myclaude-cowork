@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../types";
+import { MermaidDiagram } from "./MermaidDiagram";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -38,9 +39,69 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   );
 }
 
+/** A parsed segment of message content */
+type ContentSegment =
+  | { type: "text"; content: string }
+  | { type: "code"; language: string; content: string };
+
+/** Parse message content into text and code block segments */
+function parseContent(content: string): ContentSegment[] {
+  const segments: ContentSegment[] = [];
+  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    // Text before this code block
+    if (match.index > lastIndex) {
+      segments.push({ type: "text", content: content.slice(lastIndex, match.index) });
+    }
+    segments.push({
+      type: "code",
+      language: match[1] || "",
+      content: match[2].trimEnd(),
+    });
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Remaining text after last code block
+  if (lastIndex < content.length) {
+    segments.push({ type: "text", content: content.slice(lastIndex) });
+  }
+
+  return segments;
+}
+
 function renderContent(content: string) {
-  // Simple markdown-like rendering
-  const lines = content.split("\n");
+  const segments = parseContent(content);
+
+  return segments.map((segment, idx) => {
+    if (segment.type === "code") {
+      if (segment.language === "mermaid") {
+        return <MermaidDiagram key={idx} code={segment.content} />;
+      }
+      return (
+        <pre key={idx} style={codeStyles.block}>
+          {segment.language && (
+            <div style={codeStyles.lang}>{segment.language}</div>
+          )}
+          <code>{segment.content}</code>
+        </pre>
+      );
+    }
+
+    // Render text lines
+    return (
+      <div key={idx}>
+        {renderTextLines(segment.content)}
+      </div>
+    );
+  });
+}
+
+function renderTextLines(text: string) {
+  const lines = text.split("\n");
 
   return lines.map((line, i) => {
     // Headers
@@ -66,6 +127,19 @@ function renderContent(content: string) {
       );
     }
 
+    // Numbered list items
+    const numberedMatch = line.match(/^(\d+)\.\s+(.+)/);
+    if (numberedMatch) {
+      return (
+        <div key={i} style={{ paddingLeft: "20px", position: "relative" }}>
+          <span style={{ position: "absolute", left: "0", color: "var(--text-muted)" }}>
+            {numberedMatch[1]}.
+          </span>
+          {renderInline(numberedMatch[2])}
+        </div>
+      );
+    }
+
     // List items
     if (line.startsWith("- ") || line.startsWith("* ")) {
       return (
@@ -74,11 +148,6 @@ function renderContent(content: string) {
           {renderInline(line.slice(2))}
         </div>
       );
-    }
-
-    // Code blocks (simple)
-    if (line.startsWith("```")) {
-      return null; // Simplified for now
     }
 
     // Inline code
@@ -164,5 +233,26 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-muted)",
     marginTop: "4px",
     textAlign: "right" as const,
+  },
+};
+
+const codeStyles: Record<string, React.CSSProperties> = {
+  block: {
+    margin: "8px 0",
+    padding: "10px 12px",
+    background: "rgba(0, 0, 0, 0.3)",
+    borderRadius: "6px",
+    fontSize: "12px",
+    fontFamily: "monospace",
+    lineHeight: "1.5",
+    overflowX: "auto",
+    whiteSpace: "pre-wrap",
+  },
+  lang: {
+    fontSize: "10px",
+    color: "var(--text-muted)",
+    marginBottom: "4px",
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.5px",
   },
 };

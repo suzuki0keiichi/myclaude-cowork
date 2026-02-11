@@ -173,7 +173,12 @@ fn extract_mkdir(cmd: &str) -> String {
 }
 
 fn extract_filename(path: &str) -> String {
-    path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
+    let cleaned = strip_quotes(path);
+    cleaned.rsplit(['/', '\\']).next().unwrap_or(&cleaned).to_string()
+}
+
+fn strip_quotes(s: &str) -> String {
+    s.trim_matches(|c| c == '"' || c == '\'').to_string()
 }
 
 fn summarize_path(cmd: &str) -> String {

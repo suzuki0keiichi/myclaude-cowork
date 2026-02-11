@@ -1,10 +1,9 @@
 name: Build & Test
 
+# NOTE: 開発中はコスト節約のため手動実行のみ。
+# リリース準備ができたら push/pull_request トリガーに戻すこと。
 on:
-  push:
-    branches: [main, claude/*]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -79,4 +78,80 @@ jobs:
         with:
           name: cowork-windows-nsis
           path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+
+  build-macos:
+    name: Build macOS App
+    needs: [test-frontend, test-backend]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+      - run: pnpm install --frozen-lockfile
+      - name: Build Tauri app
+        run: pnpm tauri build
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: cowork-macos-dmg
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: warn
+      - name: Upload macOS app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: cowork-macos-app
+          path: src-tauri/target/release/bundle/macos/*.app
+          if-no-files-found: warn
+
+  build-linux:
+    name: Build Linux Packages
+    needs: [test-frontend, test-backend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libdbus-1-dev
+      - run: pnpm install --frozen-lockfile
+      - name: Build Tauri app
+        run: pnpm tauri build
+      - name: Upload deb package
+        uses: actions/upload-artifact@v4
+        with:
+          name: cowork-linux-deb
+          path: src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: warn
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: cowork-linux-appimage
+          path: src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: warn

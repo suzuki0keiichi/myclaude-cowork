@@ -100,21 +100,29 @@ fn build_details(tool_name: &str, tool_input: &serde_json::Value) -> Vec<String>
     match tool_name {
         "Bash" => {
             if let Some(cmd) = tool_input.get("command").and_then(|v| v.as_str()) {
-                details.push(format!("コマンド: {}", cmd));
+                build_bash_details(cmd, &mut details);
             }
         }
-        "Write" | "Edit" => {
+        "Write" => {
             if let Some(path) = tool_input.get("file_path").and_then(|v| v.as_str()) {
-                details.push(format!("ファイル: {}", path));
+                details.push(format!("場所: {}", friendly_path(path)));
+            }
+        }
+        "Edit" => {
+            if let Some(path) = tool_input.get("file_path").and_then(|v| v.as_str()) {
+                details.push(format!("場所: {}", friendly_path(path)));
+            }
+            if let Some(old) = tool_input.get("old_string").and_then(|v| v.as_str()) {
+                let preview: String = old.chars().take(80).collect();
+                details.push(format!("変更箇所: {}...", preview));
             }
         }
         "NotebookEdit" => {
             if let Some(path) = tool_input.get("notebook_path").and_then(|v| v.as_str()) {
-                details.push(format!("ノートブック: {}", path));
+                details.push(format!("場所: {}", friendly_path(path)));
             }
         }
         _ => {
-            // Show raw input for unknown tools
             if let Ok(json) = serde_json::to_string_pretty(tool_input) {
                 let truncated: String = json.chars().take(300).collect();
                 details.push(truncated);
@@ -123,6 +131,93 @@ fn build_details(tool_name: &str, tool_input: &serde_json::Value) -> Vec<String>
     }
 
     details
+}
+
+/// Parse Bash command into user-friendly detail lines
+fn build_bash_details(cmd: &str, details: &mut Vec<String>) {
+    let trimmed = cmd.trim();
+
+    if trimmed.starts_with("mkdir") {
+        // Show the target directory path
+        if let Some(path) = extract_last_path_arg(trimmed) {
+            details.push(format!("場所: {}", friendly_path(&path)));
+        }
+    } else if trimmed.starts_with("cp ") {
+        let args = extract_path_args(trimmed);
+        if args.len() >= 2 {
+            details.push(format!("コピー元: {}", friendly_path(&args[args.len() - 2])));
+            details.push(format!("コピー先: {}", friendly_path(args.last().unwrap())));
+        }
+    } else if trimmed.starts_with("mv ") {
+        let args = extract_path_args(trimmed);
+        if args.len() >= 2 {
+            details.push(format!("移動元: {}", friendly_path(&args[args.len() - 2])));
+            details.push(format!("移動先: {}", friendly_path(args.last().unwrap())));
+        }
+    } else if trimmed.starts_with("rm ") {
+        let args = extract_path_args(trimmed);
+        for arg in &args {
+            details.push(format!("削除対象: {}", friendly_path(arg)));
+        }
+    } else {
+        // Generic: show the full command
+        details.push(format!("実行コマンド: {}", cmd));
+    }
+}
+
+/// Extract path arguments from a command (skipping flags)
+fn extract_path_args(cmd: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut chars = cmd.chars().peekable();
+    let mut in_quote = None;
+    let mut current = String::new();
+    let mut first = true;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '"' | '\'' => {
+                if in_quote == Some(c) {
+                    in_quote = None;
+                } else if in_quote.is_none() {
+                    in_quote = Some(c);
+                } else {
+                    current.push(c);
+                }
+            }
+            ' ' if in_quote.is_none() => {
+                if !current.is_empty() {
+                    if first {
+                        first = false; // skip command name
+                    } else if !current.starts_with('-') {
+                        args.push(current.clone());
+                    }
+                    current.clear();
+                }
+            }
+            _ => current.push(c),
+        }
+    }
+    if !current.is_empty() && !first && !current.starts_with('-') {
+        args.push(current);
+    }
+    args
+}
+
+/// Extract the last path argument (for mkdir etc.)
+fn extract_last_path_arg(cmd: &str) -> Option<String> {
+    extract_path_args(cmd).into_iter().last()
+}
+
+/// Make a file path more user-friendly (shorten home dir, etc.)
+fn friendly_path(path: &str) -> String {
+    let cleaned = path.trim_matches(|c| c == '"' || c == '\'');
+    if let Some(home) = std::env::var_os("HOME") {
+        let home_str = home.to_string_lossy();
+        if cleaned.starts_with(home_str.as_ref()) {
+            return format!("~{}", &cleaned[home_str.len()..]);
+        }
+    }
+    cleaned.to_string()
 }
 
 fn approval_response(approved: bool) -> String {
@@ -287,10 +382,27 @@ mod tests {
     }
 
     #[test]
-    fn test_build_details_bash() {
+    fn test_build_details_bash_rm() {
         let details = build_details("Bash", &json!({"command": "rm -rf /tmp/test"}));
         assert_eq!(details.len(), 1);
-        assert!(details[0].contains("rm -rf"));
+        assert!(details[0].contains("削除対象"));
+        assert!(details[0].contains("/tmp/test"));
+    }
+
+    #[test]
+    fn test_build_details_bash_mkdir() {
+        let details = build_details("Bash", &json!({"command": "mkdir -p \"/Users/k/Downloads/青色申告_2025\""}));
+        assert_eq!(details.len(), 1);
+        assert!(details[0].contains("場所"));
+        assert!(details[0].contains("青色申告_2025"));
+    }
+
+    #[test]
+    fn test_build_details_bash_cp() {
+        let details = build_details("Bash", &json!({"command": "cp file.txt backup/"}));
+        assert_eq!(details.len(), 2);
+        assert!(details[0].contains("コピー元"));
+        assert!(details[1].contains("コピー先"));
     }
 
     #[test]

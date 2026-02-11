@@ -1,41 +1,41 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-interface CoworkCommand {
+interface CoworkSkill {
   name: string;
   description: string;
   body: string;
 }
 
-interface CommandManagerProps {
+interface SkillManagerProps {
   workingDir: string;
   selectedFiles: string[];
   onExecute: (message: string) => void;
 }
 
-export function CommandManager({ workingDir, selectedFiles, onExecute }: CommandManagerProps) {
-  const [commands, setCommands] = useState<CoworkCommand[]>([]);
-  const [selectedCommand, setSelectedCommand] = useState<CoworkCommand | null>(null);
+export function SkillManager({ workingDir, selectedFiles, onExecute }: SkillManagerProps) {
+  const [skills, setSkills] = useState<CoworkSkill[]>([]);
+  const [selectedSkill, setSelectedSkill] = useState<CoworkSkill | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [additionalInput, setAdditionalInput] = useState("");
-  const [newCommand, setNewCommand] = useState({
+  const [newSkill, setNewSkill] = useState({
     name: "",
     description: "",
     body: "",
   });
 
-  const loadCommands = useCallback(async () => {
+  const loadSkills = useCallback(async () => {
     try {
-      const items = await invoke<CoworkCommand[]>("list_commands");
-      setCommands(items);
+      const items = await invoke<CoworkSkill[]>("list_skills");
+      setSkills(items);
     } catch (e) {
-      console.error("Failed to load commands:", e);
+      console.error("Failed to load skills:", e);
     }
   }, []);
 
   useEffect(() => {
-    loadCommands();
-  }, [loadCommands, workingDir]);
+    loadSkills();
+  }, [loadSkills, workingDir]);
 
   const buildContext = (): string => {
     const parts: string[] = [];
@@ -52,58 +52,103 @@ export function CommandManager({ workingDir, selectedFiles, onExecute }: Command
     return parts.join("\n");
   };
 
-  const executeCommand = () => {
-    if (!selectedCommand) return;
+  const executeSkill = async () => {
+    if (!selectedSkill) return;
     const context = buildContext();
-    const message = context
-      ? `/${selectedCommand.name} ${context}`
-      : `/${selectedCommand.name}`;
-    onExecute(message);
-    setSelectedCommand(null);
+    try {
+      await invoke("execute_skill", { name: selectedSkill.name, context });
+    } catch (e) {
+      console.error("Failed to execute skill:", e);
+    }
+    setSelectedSkill(null);
     setAdditionalInput("");
   };
 
-  const saveNewCommand = async () => {
-    if (!newCommand.name.trim() || !newCommand.body.trim()) return;
+  const saveNewSkill = async () => {
+    if (!newSkill.name.trim() || !newSkill.body.trim()) return;
 
-    const command: CoworkCommand = {
-      name: newCommand.name.trim(),
-      description: newCommand.description.trim(),
-      body: newCommand.body.trim(),
+    const skill: CoworkSkill = {
+      name: newSkill.name.trim(),
+      description: newSkill.description.trim(),
+      body: newSkill.body.trim(),
     };
 
     try {
-      await invoke("save_command", { command });
+      await invoke("save_skill", { skill });
       setShowForm(false);
-      setNewCommand({ name: "", description: "", body: "" });
-      await loadCommands();
+      setNewSkill({ name: "", description: "", body: "" });
+      await loadSkills();
     } catch (e) {
-      console.error("Failed to save command:", e);
+      console.error("Failed to save skill:", e);
     }
   };
 
-  const deleteCommand = async (name: string) => {
+  const deleteSkill = async (name: string) => {
     try {
-      await invoke("delete_command", { name });
-      if (selectedCommand?.name === name) setSelectedCommand(null);
-      await loadCommands();
+      await invoke("delete_skill", { name });
+      if (selectedSkill?.name === name) setSelectedSkill(null);
+      await loadSkills();
     } catch (e) {
-      console.error("Failed to delete command:", e);
+      console.error("Failed to delete skill:", e);
     }
   };
 
-  // Command execution dialog
-  if (selectedCommand) {
+  const startChatCreation = () => {
+    const prompt = [
+      "ユーザーが繰り返し使えるスキル（自動化手順）を新しく作りたいと言っています。",
+      "以下の手順で対話的にスキルを作成してください。",
+      "",
+      "## 進め方",
+      "",
+      "1. まずユーザーに「どんな作業を自動化したいですか？」と聞いてください。",
+      "2. ユーザーの回答をもとに、あなたの理解を **Mermaid形式のフローチャート** で示してください。",
+      "   - ```mermaid で囲んでください（このアプリはMermaid図を描画できます）",
+      "   - フローチャートには処理の流れ、条件分岐、入出力を含めてください",
+      "   - ノードのラベルは日本語で書いてください",
+      "3. 「この理解で合っていますか？修正したい点があれば教えてください」と確認してください。",
+      "4. ユーザーがOKと言うまで 2-3 を繰り返してください。",
+      "5. 確定したら、スキルファイルをWriteツールで書き込んでください。",
+      "   - パス: .claude/skills/{スキル名}/SKILL.md",
+      "   - スキル名は日本語OK（例: .claude/skills/請求書振り分け/SKILL.md）",
+      "   - YAML frontmatter に name と description を入れてください",
+      "   - 本文は、Claudeへの指示として機能するプロンプトにしてください",
+      "   - 実行時にファイルリストなど追加情報が渡される場合は $ARGUMENTS を使ってください",
+      "",
+      "## ファイル形式",
+      "",
+      "```",
+      "---",
+      "name: スキル名",
+      "description: このスキルの説明",
+      "---",
+      "",
+      "ここにClaude への指示を書く",
+      "",
+      "$ARGUMENTS",
+      "```",
+      "",
+      "## 注意",
+      "",
+      "- ユーザーはプログラミングの知識がありません。専門用語は避けてください。",
+      "- フローチャートで「こういうことですよね？」と確認するのが最も重要なステップです。",
+      "- スキル名は分かりやすい日本語にしてください。",
+    ].join("\n");
+
+    onExecute(prompt);
+  };
+
+  // Skill execution dialog
+  if (selectedSkill) {
     return (
       <div style={styles.container}>
         <div style={styles.header}>
-          <button onClick={() => setSelectedCommand(null)} style={styles.backButton}>
+          <button onClick={() => setSelectedSkill(null)} style={styles.backButton}>
             ← 戻る
           </button>
-          <span style={styles.headerTitle}>{selectedCommand.name}</span>
+          <span style={styles.headerTitle}>{selectedSkill.name}</span>
         </div>
         <div style={styles.content}>
-          <p style={styles.description}>{selectedCommand.description}</p>
+          <p style={styles.description}>{selectedSkill.description}</p>
 
           <div style={styles.contextSection}>
             <label style={styles.paramLabel}>自動提供されるコンテキスト</label>
@@ -126,7 +171,7 @@ export function CommandManager({ workingDir, selectedFiles, onExecute }: Command
               )}
               {selectedFiles.length === 0 && (
                 <div style={styles.contextHint}>
-                  ファイルタブでファイルを選択すると、コマンドに自動で渡されます
+                  ファイルタブでファイルを選択すると、スキルに自動で渡されます
                 </div>
               )}
             </div>
@@ -142,7 +187,7 @@ export function CommandManager({ workingDir, selectedFiles, onExecute }: Command
             />
           </div>
 
-          <button onClick={executeCommand} style={styles.executeButton}>
+          <button onClick={executeSkill} style={styles.executeButton}>
             実行する
           </button>
         </div>
@@ -150,7 +195,7 @@ export function CommandManager({ workingDir, selectedFiles, onExecute }: Command
     );
   }
 
-  // New command form
+  // New skill form
   if (showForm) {
     return (
       <div style={styles.container}>
@@ -158,15 +203,15 @@ export function CommandManager({ workingDir, selectedFiles, onExecute }: Command
           <button onClick={() => setShowForm(false)} style={styles.backButton}>
             ← 戻る
           </button>
-          <span style={styles.headerTitle}>新しいコマンド</span>
+          <span style={styles.headerTitle}>新しいスキル</span>
         </div>
         <div style={styles.content}>
           <div style={styles.paramGroup}>
-            <label style={styles.paramLabel}>コマンド名</label>
+            <label style={styles.paramLabel}>スキル名</label>
             <input
               type="text"
-              value={newCommand.name}
-              onChange={(e) => setNewCommand({ ...newCommand, name: e.target.value })}
+              value={newSkill.name}
+              onChange={(e) => setNewSkill({ ...newSkill, name: e.target.value })}
               style={styles.paramInput}
               placeholder="例: 請求書振り分け"
             />
@@ -175,9 +220,9 @@ export function CommandManager({ workingDir, selectedFiles, onExecute }: Command
             <label style={styles.paramLabel}>説明</label>
             <input
               type="text"
-              value={newCommand.description}
+              value={newSkill.description}
               onChange={(e) =>
-                setNewCommand({ ...newCommand, description: e.target.value })
+                setNewSkill({ ...newSkill, description: e.target.value })
               }
               style={styles.paramInput}
               placeholder="例: PDFの請求書を取引先ごとに振り分ける"
@@ -186,9 +231,9 @@ export function CommandManager({ workingDir, selectedFiles, onExecute }: Command
           <div style={styles.paramGroup}>
             <label style={styles.paramLabel}>指示内容</label>
             <textarea
-              value={newCommand.body}
+              value={newSkill.body}
               onChange={(e) =>
-                setNewCommand({ ...newCommand, body: e.target.value })
+                setNewSkill({ ...newSkill, body: e.target.value })
               }
               style={{ ...styles.paramInput, minHeight: "120px", resize: "vertical" as const }}
               placeholder={
@@ -202,11 +247,11 @@ export function CommandManager({ workingDir, selectedFiles, onExecute }: Command
             </p>
           </div>
           <button
-            onClick={saveNewCommand}
-            disabled={!newCommand.name.trim() || !newCommand.body.trim()}
+            onClick={saveNewSkill}
+            disabled={!newSkill.name.trim() || !newSkill.body.trim()}
             style={{
               ...styles.executeButton,
-              opacity: newCommand.name.trim() && newCommand.body.trim() ? 1 : 0.4,
+              opacity: newSkill.name.trim() && newSkill.body.trim() ? 1 : 0.4,
             }}
           >
             保存
@@ -223,45 +268,50 @@ export function CommandManager({ workingDir, selectedFiles, onExecute }: Command
         <div style={styles.empty}>
           作業フォルダを選択すると
           <br />
-          コマンドが表示されます。
+          スキルが表示されます。
         </div>
       </div>
     );
   }
 
-  // Command list
+  // Skill list
   return (
     <div style={styles.container}>
       <div style={styles.list}>
-        {commands.map((cmd) => (
-          <div key={cmd.name} style={styles.commandItem}>
+        {skills.map((skill) => (
+          <div key={skill.name} style={styles.skillItem}>
             <div
-              style={styles.commandInfo}
-              onClick={() => setSelectedCommand(cmd)}
+              style={styles.skillInfo}
+              onClick={() => setSelectedSkill(skill)}
             >
-              <div style={styles.commandName}>{cmd.name}</div>
-              <div style={styles.commandDesc}>{cmd.description}</div>
+              <div style={styles.skillName}>{skill.name}</div>
+              <div style={styles.skillDesc}>{skill.description}</div>
             </div>
             <button
-              onClick={() => deleteCommand(cmd.name)}
-              style={styles.commandDelete}
+              onClick={() => deleteSkill(skill.name)}
+              style={styles.skillDelete}
               title="削除"
             >
               ×
             </button>
           </div>
         ))}
-        {commands.length === 0 && (
+        {skills.length === 0 && (
           <div style={styles.empty}>
-            コマンドはまだありません。
+            スキルはまだありません。
             <br />
-            よく使う操作を登録しましょう。
+            「チャットで作る」から、やりたいことを
+            <br />
+            話すだけでスキルを作れます。
           </div>
         )}
       </div>
       <div style={styles.footer}>
-        <button onClick={() => setShowForm(true)} style={styles.newButton}>
-          + 新しいコマンド
+        <button onClick={startChatCreation} style={styles.chatCreateButton}>
+          + チャットで作る
+        </button>
+        <button onClick={() => setShowForm(true)} style={styles.manualCreateButton}>
+          自分で書く
         </button>
       </div>
     </div>
@@ -376,30 +426,30 @@ const styles: Record<string, React.CSSProperties> = {
     overflowY: "auto",
     padding: "4px 0",
   },
-  commandItem: {
+  skillItem: {
     display: "flex",
     alignItems: "center",
     padding: "8px 12px",
     borderBottom: "1px solid var(--border)",
     cursor: "pointer",
   },
-  commandInfo: {
+  skillInfo: {
     flex: 1,
     overflow: "hidden",
   },
-  commandName: {
+  skillName: {
     fontSize: "13px",
     fontWeight: 600,
     color: "var(--text-primary)",
   },
-  commandDesc: {
+  skillDesc: {
     fontSize: "11px",
     color: "var(--text-muted)",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  commandDelete: {
+  skillDelete: {
     background: "none",
     border: "none",
     color: "var(--text-muted)",
@@ -419,15 +469,29 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8px 12px",
     borderTop: "1px solid var(--border)",
   },
-  newButton: {
+  chatCreateButton: {
     width: "100%",
-    padding: "6px",
-    background: "var(--bg-input)",
-    border: "1px solid var(--border)",
+    padding: "8px",
+    background: "var(--accent)",
+    border: "none",
     borderRadius: "6px",
-    color: "var(--text-secondary)",
+    color: "white",
     fontSize: "12px",
+    fontWeight: 600,
     cursor: "pointer",
     fontFamily: "inherit",
+    marginBottom: "4px",
+  },
+  manualCreateButton: {
+    width: "100%",
+    padding: "6px",
+    background: "none",
+    border: "none",
+    borderRadius: "6px",
+    color: "var(--text-muted)",
+    fontSize: "11px",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    textDecoration: "underline" as const,
   },
 };
