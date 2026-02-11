@@ -75,9 +75,9 @@ function LocalLlmSettingsPanel() {
 
   return (
     <div style={styles.section}>
-      <h3 style={styles.sectionTitle}>ローカルLLM (OpenVINO対応)</h3>
+      <h3 style={styles.sectionTitle}>ローカルLLM（OpenVINO / Ollama等対応）</h3>
       <p style={styles.desc}>
-        OpenVINO Model ServerやOllamaなど、OpenAI互換APIを提供するローカルLLMサーバーと連携します。
+        OpenVINO Model Server、Ollama、llama.cpp、vLLMなど、OpenAI互換APIを提供するローカルLLMサーバーと連携します。
       </p>
 
       <label style={styles.label}>
