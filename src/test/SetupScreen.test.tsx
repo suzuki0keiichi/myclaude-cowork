@@ -16,6 +16,9 @@ describe("SetupScreen", () => {
     const user = userEvent.setup();
     render(<SetupScreen onSetup={onSetup} />);
 
+    // Manual input is hidden by default; click toggle to show it
+    await user.click(screen.getByText("または手動で入力"));
+
     const input = screen.getByPlaceholderText(/例:/);
     await user.type(input, "C:\\Users\\test\\Documents");
     await user.click(screen.getByText("はじめる"));
@@ -27,6 +30,9 @@ describe("SetupScreen", () => {
     const onSetup = vi.fn();
     const user = userEvent.setup();
     render(<SetupScreen onSetup={onSetup} />);
+
+    // Manual input is hidden by default; click toggle to show it
+    await user.click(screen.getByText("または手動で入力"));
 
     const input = screen.getByPlaceholderText(/例:/);
     await user.type(input, "/home/user/work{Enter}");
