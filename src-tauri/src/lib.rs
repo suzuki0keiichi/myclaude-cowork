@@ -53,10 +53,12 @@ async fn set_working_directory(
     app: AppHandle,
     state: State<'_, ClaudeState>,
     skill_state: State<'_, SkillState>,
+    llm_state: State<'_, LocalLlmState>,
     path: String,
 ) -> Result<(), String> {
     state.set_working_dir(path.clone()).await;
     skill_state.set_working_dir(path.clone()).await;
+    llm_state.set_working_dir(path.clone()).await;
 
     if !path.is_empty() {
         if let Err(e) = save_last_working_dir(&app, &path).await {
@@ -514,11 +516,13 @@ fn get_resource_dir(app: &tauri::App) -> Option<PathBuf> {
 pub fn run() {
     let approval_pending: ApprovalPendingState = Arc::new(Mutex::new(HashMap::new()));
     let claude_manager = Arc::new(ClaudeManager::new(Arc::clone(&approval_pending)));
+    let local_llm_manager = Arc::new(LocalLlmManager::new(Arc::clone(&approval_pending)));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(claude_manager)
+        .manage(local_llm_manager)
         .manage(approval_pending)
         .invoke_handler(tauri::generate_handler![
             send_message,
@@ -601,13 +605,11 @@ pub fn run() {
             app.manage(todo_manager);
 
             // Initialize local LLM manager
-            let local_llm_manager = Arc::new(LocalLlmManager::new());
-            let llm_ref = local_llm_manager.clone();
+            let local_llm: Arc<LocalLlmManager> = app.state::<LocalLlmState>().inner().clone();
             let data_dir_for_llm = data_dir.clone();
             tauri::async_runtime::spawn(async move {
-                llm_ref.set_data_dir(data_dir_for_llm).await;
+                local_llm.set_data_dir(data_dir_for_llm).await;
             });
-            app.manage(local_llm_manager);
 
             // Initialize Google Drive client
             let gdrive_client =
