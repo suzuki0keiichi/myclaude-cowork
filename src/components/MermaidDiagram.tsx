@@ -48,7 +48,9 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
 
     (async () => {
       try {
-        const { svg } = await mermaid.render(idRef, code);
+        // Replace literal \n in node labels with <br/> for proper line breaks
+        const processedCode = code.replace(/\\n/g, "<br/>");
+        const { svg } = await mermaid.render(idRef, processedCode);
         if (!cancelled && containerRef.current) {
           containerRef.current.innerHTML = svg;
           setError(null);

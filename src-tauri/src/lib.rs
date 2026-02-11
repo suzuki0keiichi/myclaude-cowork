@@ -1,17 +1,17 @@
 mod approval_server;
 mod claude;
-mod commands;
 mod files;
 mod gdrive;
 mod oauth_server;
+mod skills;
 mod slack;
 mod todos;
 mod translator;
 
 use claude::{ChatMessage, ClaudeManager};
-use commands::{CommandStore, CoworkCommand};
 use files::FileEntry;
 use gdrive::{DriveFile, GDriveClient};
+use skills::{CoworkSkill, SkillStore};
 use slack::{SlackClient, SlackListItem, SlackSettings};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,7 +21,7 @@ use todos::{TodoItem, TodoManager};
 use tokio::sync::{Mutex, oneshot};
 
 type ClaudeState = Arc<ClaudeManager>;
-type CommandState = Arc<CommandStore>;
+type SkillState = Arc<SkillStore>;
 type GDriveState = Arc<GDriveClient>;
 type SlackState = Arc<SlackClient>;
 type TodoState = Arc<TodoManager>;
@@ -49,24 +49,25 @@ async fn send_message(
 async fn set_working_directory(
     app: AppHandle,
     state: State<'_, ClaudeState>,
-    command_state: State<'_, CommandState>,
+    skill_state: State<'_, SkillState>,
     path: String,
 ) -> Result<(), String> {
     state.set_working_dir(path.clone()).await;
-    command_state.set_working_dir(path.clone()).await;
+    skill_state.set_working_dir(path.clone()).await;
 
     if !path.is_empty() {
         if let Err(e) = save_last_working_dir(&app, &path).await {
             log::warn!("Failed to save working dir: {}", e);
         }
 
-        match command_state.migrate_legacy_skills().await {
+        // Migrate legacy JSON skills
+        match skill_state.migrate_legacy_skills().await {
             Ok(count) if count > 0 => {
-                log::info!("Migrated {} legacy skills to commands format", count);
+                log::info!("Migrated {} legacy JSON skills", count);
                 let msg = ChatMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     role: "system".to_string(),
-                    content: format!("{}件のスキルをコマンド形式に移行しました", count),
+                    content: format!("{}件のレガシースキルを移行しました", count),
                     timestamp: chrono::Utc::now().to_rfc3339(),
                 };
                 let _ = app.emit("claude:message", &msg);
@@ -76,9 +77,32 @@ async fn set_working_directory(
             }
             _ => {}
         }
+
+        // Migrate old .claude/commands/ to .claude/skills/
+        match skill_state.migrate_commands_to_skills().await {
+            Ok(count) if count > 0 => {
+                log::info!("Migrated {} commands to skills format", count);
+                let msg = ChatMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    role: "system".to_string(),
+                    content: format!("{}件のコマンドをスキル形式に移行しました", count),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                };
+                let _ = app.emit("claude:message", &msg);
+            }
+            Err(e) => {
+                log::warn!("Command to skill migration failed: {}", e);
+            }
+            _ => {}
+        }
     }
 
     Ok(())
+}
+
+#[tauri::command]
+async fn cancel_message(state: State<'_, ClaudeState>) -> Result<(), String> {
+    state.cancel().await
 }
 
 #[tauri::command]
@@ -117,33 +141,34 @@ async fn get_file_tree(path: String) -> Result<FileEntry, String> {
     files::get_file_tree(&path).await
 }
 
-// ── Command commands ──
+// ── Skill commands ──
 
 #[tauri::command]
-async fn list_commands(state: State<'_, CommandState>) -> Result<Vec<CoworkCommand>, String> {
+async fn list_skills(state: State<'_, SkillState>) -> Result<Vec<CoworkSkill>, String> {
     state.list().await
 }
 
 #[tauri::command]
-async fn save_command(
-    state: State<'_, CommandState>,
-    command: CoworkCommand,
+async fn save_skill(
+    state: State<'_, SkillState>,
+    skill: CoworkSkill,
 ) -> Result<(), String> {
-    state.save(&command).await
+    state.save(&skill).await
 }
 
 #[tauri::command]
-async fn delete_command(state: State<'_, CommandState>, name: String) -> Result<(), String> {
+async fn delete_skill(state: State<'_, SkillState>, name: String) -> Result<(), String> {
     state.delete(&name).await
 }
 
 #[tauri::command]
-async fn execute_command(
+async fn execute_skill(
     app: AppHandle,
     claude_state: State<'_, ClaudeState>,
     name: String,
     context: String,
 ) -> Result<(), String> {
+    // Send /{skill-name} to Claude Code CLI — it handles skill expansion natively
     let message = if context.is_empty() {
         format!("/{}", name)
     } else {
@@ -446,14 +471,15 @@ pub fn run() {
         .manage(approval_pending)
         .invoke_handler(tauri::generate_handler![
             send_message,
+            cancel_message,
             set_working_directory,
             get_working_directory,
             list_files,
             get_file_tree,
-            list_commands,
-            save_command,
-            delete_command,
-            execute_command,
+            list_skills,
+            save_skill,
+            delete_skill,
+            execute_skill,
             todo_list,
             todo_add,
             todo_toggle,
@@ -500,9 +526,14 @@ pub fn run() {
                 log::warn!("Hook installation failed: {}", e);
             }
 
-            // Initialize command store
-            let command_store = Arc::new(CommandStore::new(data_dir.clone()));
-            app.manage(command_store);
+            // Restore saved session ID so conversations persist across restarts
+            let claude: Arc<ClaudeManager> = app.state::<ClaudeState>().inner().clone();
+            let data_dir_for_session = data_dir.clone();
+            tauri::async_runtime::block_on(claude.set_data_dir(data_dir_for_session));
+
+            // Initialize skill store
+            let skill_store = Arc::new(SkillStore::new(data_dir.clone()));
+            app.manage(skill_store);
 
             // Initialize todo manager
             let todo_manager = Arc::new(TodoManager::new(data_dir.clone()));

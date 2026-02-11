@@ -114,10 +114,17 @@ pub enum ContentBlock {
 }
 
 pub struct ClaudeManager {
-    session_id: Arc<Mutex<Option<String>>>,
+    /// App-controlled session UUID (not parsed from Claude output)
+    managed_session_id: Mutex<String>,
+    /// Whether first message has been sent (for --session-id vs --resume)
+    first_message_sent: std::sync::atomic::AtomicBool,
     working_dir: Mutex<String>,
     approval_port: Arc<Mutex<Option<u16>>>,
     approval_pending: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+    /// App data directory for persisting session ID
+    data_dir: Mutex<Option<PathBuf>>,
+    /// PID of the running Claude process (for cancellation)
+    child_pid: Mutex<Option<u32>>,
 }
 
 impl ClaudeManager {
@@ -125,10 +132,13 @@ impl ClaudeManager {
         approval_pending: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
     ) -> Self {
         Self {
-            session_id: Arc::new(Mutex::new(None)),
+            managed_session_id: Mutex::new(uuid::Uuid::new_v4().to_string()),
+            first_message_sent: std::sync::atomic::AtomicBool::new(false),
             working_dir: Mutex::new(String::new()),
             approval_port: Arc::new(Mutex::new(None)),
             approval_pending,
+            data_dir: Mutex::new(None),
+            child_pid: Mutex::new(None),
         }
     }
 
@@ -141,9 +151,68 @@ impl ClaudeManager {
         *wd = dir;
     }
 
+    /// Set the data directory and restore a saved session ID if available
+    pub async fn set_data_dir(&self, dir: PathBuf) {
+        let session_file = dir.join("session_id.txt");
+        if session_file.exists() {
+            if let Ok(saved_id) = std::fs::read_to_string(&session_file) {
+                let saved_id = saved_id.trim().to_string();
+                if !saved_id.is_empty() {
+                    let mut id = self.managed_session_id.lock().await;
+                    *id = saved_id;
+                    self.first_message_sent.store(true, std::sync::atomic::Ordering::Relaxed);
+                    log::info!("Restored session ID from disk");
+                }
+            }
+        }
+        let mut dd = self.data_dir.lock().await;
+        *dd = Some(dir);
+    }
+
+    /// Save the current session ID to disk
+    async fn save_session_id(&self) {
+        let dd = self.data_dir.lock().await;
+        if let Some(ref dir) = *dd {
+            let session_id = self.managed_session_id.lock().await.clone();
+            let session_file = dir.join("session_id.txt");
+            if let Err(e) = std::fs::write(&session_file, &session_id) {
+                log::warn!("Failed to save session ID: {}", e);
+            }
+        }
+    }
+
     pub async fn reset_session(&self) {
-        let mut s = self.session_id.lock().await;
-        *s = None;
+        let mut id = self.managed_session_id.lock().await;
+        *id = uuid::Uuid::new_v4().to_string();
+        self.first_message_sent.store(false, std::sync::atomic::Ordering::Relaxed);
+        // Delete saved session file
+        let dd = self.data_dir.lock().await;
+        if let Some(ref dir) = *dd {
+            let session_file = dir.join("session_id.txt");
+            let _ = std::fs::remove_file(&session_file);
+        }
+    }
+
+    /// Cancel the currently running Claude process
+    pub async fn cancel(&self) -> Result<(), String> {
+        let pid = self.child_pid.lock().await.take();
+        if let Some(pid) = pid {
+            #[cfg(unix)]
+            {
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGTERM);
+                }
+            }
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .output();
+            }
+            Ok(())
+        } else {
+            Ok(()) // No process running, not an error
+        }
     }
 
     /// Ensure the approval server is running, return port
@@ -189,14 +258,19 @@ impl ClaudeManager {
             serde_json::json!({})
         };
 
-        // Build the hook command
-        let hook_command = format!("node {}", hook_dest.to_string_lossy().replace('\\', "\\\\"));
+        // Build the hook command (quote the path for spaces in "Application Support" etc.)
+        let hook_path = hook_dest.to_string_lossy();
+        let hook_command = if hook_path.contains(' ') {
+            format!("node '{}'", hook_path)
+        } else {
+            format!("node {}", hook_path)
+        };
 
-        // Check if hook is already configured
-        let already_configured = settings.get("hooks")
+        // Check if hook is already configured and if the command needs updating
+        let existing_hook_index = settings.get("hooks")
             .and_then(|h| h.get("PreToolUse"))
             .and_then(|p| p.as_array())
-            .map(|arr| arr.iter().any(|item| {
+            .and_then(|arr| arr.iter().position(|item| {
                 item.get("hooks")
                     .and_then(|h| h.as_array())
                     .map(|hooks| hooks.iter().any(|hook| {
@@ -206,25 +280,28 @@ impl ClaudeManager {
                             .unwrap_or(false)
                     }))
                     .unwrap_or(false)
-            }))
-            .unwrap_or(false);
+            }));
 
-        if !already_configured {
-            // Backup existing settings
-            if settings_path.exists() {
-                let backup_path = claude_dir.join("settings.json.cowork-backup");
-                let _ = std::fs::copy(&settings_path, &backup_path);
+        let hook_config = serde_json::json!({
+            "matcher": "",
+            "hooks": [{
+                "type": "command",
+                "command": hook_command
+            }]
+        });
+
+        let needs_write = if let Some(idx) = existing_hook_index {
+            // Hook exists - check if command needs updating (e.g. path quoting fix)
+            let current = &settings["hooks"]["PreToolUse"][idx];
+            if *current != hook_config {
+                // Update the existing hook entry
+                settings["hooks"]["PreToolUse"][idx] = hook_config;
+                true
+            } else {
+                false
             }
-
-            // Add hook configuration
-            let hook_config = serde_json::json!({
-                "matcher": "",
-                "hooks": [{
-                    "type": "command",
-                    "command": hook_command
-                }]
-            });
-
+        } else {
+            // Hook not configured yet - add it
             let hooks = settings.as_object_mut().unwrap()
                 .entry("hooks")
                 .or_insert_with(|| serde_json::json!({}));
@@ -235,11 +312,20 @@ impl ClaudeManager {
             if let Some(arr) = pre_tool_use.as_array_mut() {
                 arr.push(hook_config);
             }
+            true
+        };
+
+        if needs_write {
+            // Backup existing settings
+            if settings_path.exists() {
+                let backup_path = claude_dir.join("settings.json.cowork-backup");
+                let _ = std::fs::copy(&settings_path, &backup_path);
+            }
 
             std::fs::write(&settings_path, serde_json::to_string_pretty(&settings).unwrap())
                 .map_err(|e| format!("settings.json書き込みエラー: {}", e))?;
 
-            log::info!("Cowork hook installed in {}", settings_path.display());
+            log::info!("Cowork hook installed/updated in {}", settings_path.display());
         }
 
         Ok(hook_dest)
@@ -265,18 +351,27 @@ impl ClaudeManager {
             "--output-format".to_string(),
             "stream-json".to_string(),
             "--verbose".to_string(),
+            "--append-system-prompt".to_string(),
+            "You are running inside the Cowork desktop app. Tool permissions are handled automatically by the app's approval UI dialog. Do not ask the user for text-based permission or approval. Just use tools (Bash, Write, Edit, etc.) directly as needed. The app will show an approval dialog to the user when necessary.".to_string(),
         ];
 
-        // If we have a session, continue it
-        let session = self.session_id.lock().await.clone();
-        if let Some(sid) = &session {
+        // Session management: first message uses --session-id, subsequent use --resume
+        let session_id = self.managed_session_id.lock().await.clone();
+        let is_resume = self.first_message_sent.load(std::sync::atomic::Ordering::Relaxed);
+        if is_resume {
             args.push("--resume".to_string());
-            args.push(sid.clone());
+            args.push(session_id.clone());
+        } else {
+            args.push("--session-id".to_string());
+            args.push(session_id.clone());
         }
 
         args.push(message);
 
-        log::info!("Spawning claude with args: {:?}, approval_port: {}", args, approval_port);
+        log::info!(
+            "Spawning claude: session_id={}, is_resume={}, approval_port={}, args_count={}",
+            session_id, is_resume, approval_port, args.len()
+        );
 
         // Spawn claude process with approval port environment variable
         let mut child = Command::new("claude")
@@ -289,12 +384,22 @@ impl ClaudeManager {
             .spawn()
             .map_err(|e| format!("Claude Codeを起動できませんでした: {}", e))?;
 
+        // Store PID for cancellation
+        if let Some(pid) = child.id() {
+            *self.child_pid.lock().await = Some(pid);
+        }
+
+        // Mark first message sent (subsequent messages will use --resume)
+        if !is_resume {
+            self.save_session_id().await;
+        }
+        self.first_message_sent.store(true, std::sync::atomic::Ordering::Relaxed);
+
         let stdout = child.stdout.take().ok_or("Claude Codeの出力を取得できませんでした")?;
         let stderr = child.stderr.take().ok_or("Claude Codeのエラー出力を取得できませんでした")?;
 
         // Read stdout line by line (NDJSON)
         let app_handle = app.clone();
-        let session_id_ref = Arc::clone(&self.session_id);
 
         let stdout_task = tokio::spawn(async move {
             let reader = BufReader::new(stdout);
@@ -311,11 +416,7 @@ impl ClaudeManager {
                 match parsed {
                     Ok(event) => {
                         match &event {
-                            ClaudeStreamEvent::System { session_id, .. } => {
-                                if let Some(sid) = session_id {
-                                    let mut s = session_id_ref.lock().await;
-                                    *s = Some(sid.clone());
-                                }
+                            ClaudeStreamEvent::System { .. } => {
                                 let _ = app_handle.emit("claude:system", &event);
                             }
 
@@ -417,6 +518,7 @@ impl ClaudeManager {
 
         // Wait for process to finish
         let status = child.wait().await.map_err(|e| format!("プロセスエラー: {}", e))?;
+        *self.child_pid.lock().await = None;
         let _ = stdout_task.await;
         let _ = stderr_task.await;
 

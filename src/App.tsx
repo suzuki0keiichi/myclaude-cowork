@@ -7,12 +7,12 @@ import { StreamingIndicator } from "./components/StreamingIndicator";
 import { SetupScreen } from "./components/SetupScreen";
 import { FileBrowser } from "./components/FileBrowser";
 import { TodoPanel } from "./components/TodoPanel";
-import { CommandManager } from "./components/CommandManager";
+import { SkillManager } from "./components/SkillManager";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { ApprovalDialog } from "./components/ApprovalDialog";
 import "./App.css";
 
-type SidebarTab = "files" | "commands" | "todos" | "settings";
+type SidebarTab = "files" | "skills" | "todos" | "settings";
 
 function App() {
   const {
@@ -25,6 +25,7 @@ function App() {
     error,
     pendingApproval,
     sendMessage,
+    cancelMessage,
     changeWorkingDir,
     clearMessages,
     respondToApproval,
@@ -74,10 +75,10 @@ function App() {
             📁 ファイル
           </button>
           <button
-            className={`sidebar-tab ${sidebarTab === "commands" ? "active" : ""}`}
-            onClick={() => setSidebarTab("commands")}
+            className={`sidebar-tab ${sidebarTab === "skills" ? "active" : ""}`}
+            onClick={() => setSidebarTab("skills")}
           >
-            ⚡ コマンド
+            ⚡ スキル
           </button>
           <button
             className={`sidebar-tab ${sidebarTab === "todos" ? "active" : ""}`}
@@ -104,8 +105,8 @@ function App() {
               onFileToggle={handleFileToggle}
             />
           )}
-          {sidebarTab === "commands" && (
-            <CommandManager
+          {sidebarTab === "skills" && (
+            <SkillManager
               workingDir={workingDir}
               selectedFiles={selectedFiles}
               onExecute={sendMessage}
@@ -131,7 +132,6 @@ function App() {
       <main className="chat-main">
         <div className="chat-header">
           <span>チャット</span>
-          {isLoading && <span className="loading-badge">応答中...</span>}
           <span className="chat-header-path" title={workingDir}>
             {workingDir}
           </span>
@@ -189,7 +189,7 @@ function App() {
           <div ref={chatEndRef} />
         </div>
 
-        <ChatInput onSend={sendMessage} disabled={isLoading} />
+        <ChatInput onSend={sendMessage} disabled={isLoading} isLoading={isLoading} onCancel={cancelMessage} />
       </main>
 
       <aside className="activity-sidebar">

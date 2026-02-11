@@ -5,7 +5,19 @@
 
 const http = require('http');
 
-const port = process.env.COWORK_APPROVAL_PORT;
+// Get approval port from env var (only set by Cowork app)
+const port = process.env.COWORK_APPROVAL_PORT || null;
+
+// Write output and exit safely (wait for stdout flush)
+function writeAndExit(output) {
+  if (output) {
+    process.stdout.write(JSON.stringify(output), () => {
+      process.exit(0);
+    });
+  } else {
+    process.exit(0);
+  }
+}
 
 let input = '';
 process.stdin.on('data', (chunk) => {
@@ -14,6 +26,7 @@ process.stdin.on('data', (chunk) => {
 process.stdin.on('end', () => {
   if (!port) {
     // No server port configured, auto-approve
+    process.stderr.write('cowork-hook: no approval port found (env or file)\n');
     process.exit(0);
     return;
   }
@@ -37,32 +50,31 @@ process.stdin.on('end', () => {
       try {
         const parsed = JSON.parse(responseData);
         if (parsed.approved) {
-          // Approved: use hookSpecificOutput format
-          process.stdout.write(JSON.stringify({
+          writeAndExit({
             hookSpecificOutput: {
               hookEventName: "PreToolUse",
               permissionDecision: "allow"
             }
-          }));
+          });
         } else {
-          // Denied
-          process.stdout.write(JSON.stringify({
+          writeAndExit({
             hookSpecificOutput: {
               hookEventName: "PreToolUse",
               permissionDecision: "deny",
               permissionDecisionReason: "ユーザーが操作を拒否しました"
             }
-          }));
+          });
         }
       } catch (e) {
-        // Parse error, auto-approve
+        process.stderr.write('cowork-hook: JSON parse error: ' + e.message + '\n');
+        process.exit(0);
       }
-      process.exit(0);
     });
   });
 
-  req.on('error', () => {
+  req.on('error', (e) => {
     // Server unreachable, auto-approve (exit 0 with no output = allow)
+    process.stderr.write('cowork-hook: connection error: ' + e.message + '\n');
     process.exit(0);
   });
 

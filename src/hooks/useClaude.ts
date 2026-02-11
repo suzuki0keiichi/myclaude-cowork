@@ -177,6 +177,16 @@ export function useClaude() {
     setPendingApproval(null);
   }, [pendingApproval]);
 
+  const cancelMessage = useCallback(async () => {
+    try {
+      await invoke("cancel_message");
+    } catch (e) {
+      console.error("Failed to cancel:", e);
+    }
+    setIsLoading(false);
+    setStreamingText("");
+  }, []);
+
   const clearMessages = useCallback(() => {
     setMessages([]);
     setActivities([]);
@@ -195,6 +205,7 @@ export function useClaude() {
     error,
     pendingApproval,
     sendMessage,
+    cancelMessage,
     changeWorkingDir,
     clearMessages,
     respondToApproval,
