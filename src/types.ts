@@ -20,3 +20,13 @@ export interface ApprovalRequest {
   raw_input: string;
   details: string[];
 }
+
+export type InferenceMode = "claude" | "local_llm";
+
+export interface LocalLlmSettings {
+  enabled: boolean;
+  endpoint: string;
+  model: string;
+  api_key: string | null;
+  system_prompt: string | null;
+}

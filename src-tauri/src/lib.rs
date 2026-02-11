@@ -2,6 +2,7 @@ mod approval_server;
 mod claude;
 mod files;
 mod gdrive;
+mod local_llm;
 mod oauth_server;
 mod skills;
 mod slack;
@@ -11,6 +12,7 @@ mod translator;
 use claude::{ChatMessage, ClaudeManager};
 use files::FileEntry;
 use gdrive::{DriveFile, GDriveClient};
+use local_llm::{LocalLlmManager, LocalLlmSettings};
 use skills::{CoworkSkill, SkillStore};
 use slack::{SlackClient, SlackListItem, SlackSettings};
 use std::collections::HashMap;
@@ -25,6 +27,7 @@ type SkillState = Arc<SkillStore>;
 type GDriveState = Arc<GDriveClient>;
 type SlackState = Arc<SlackClient>;
 type TodoState = Arc<TodoManager>;
+type LocalLlmState = Arc<LocalLlmManager>;
 type ApprovalPendingState = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
 
 // ── Claude commands ──
@@ -374,6 +377,54 @@ async fn slack_create_item(
     state.create_item(&list_id, &title).await
 }
 
+// ── Local LLM commands ──
+
+#[tauri::command]
+async fn local_llm_get_settings(
+    state: State<'_, LocalLlmState>,
+) -> Result<LocalLlmSettings, String> {
+    Ok(state.get_settings().await)
+}
+
+#[tauri::command]
+async fn local_llm_save_settings(
+    state: State<'_, LocalLlmState>,
+    settings: LocalLlmSettings,
+) -> Result<(), String> {
+    state.save_settings(settings).await
+}
+
+#[tauri::command]
+async fn local_llm_send_message(
+    app: AppHandle,
+    state: State<'_, LocalLlmState>,
+    message: String,
+) -> Result<(), String> {
+    let user_msg = ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: "user".to_string(),
+        content: message.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    let _ = app.emit("claude:message", &user_msg);
+    state.send_message(&app, message).await
+}
+
+#[tauri::command]
+async fn local_llm_test_connection(
+    state: State<'_, LocalLlmState>,
+) -> Result<String, String> {
+    state.test_connection().await
+}
+
+#[tauri::command]
+async fn local_llm_clear_conversation(
+    state: State<'_, LocalLlmState>,
+) -> Result<(), String> {
+    state.clear_conversation().await;
+    Ok(())
+}
+
 // ── Working directory persistence ──
 
 #[tauri::command]
@@ -501,6 +552,12 @@ pub fn run() {
             slack_logout,
             slack_list_items,
             slack_create_item,
+            // Local LLM
+            local_llm_get_settings,
+            local_llm_save_settings,
+            local_llm_send_message,
+            local_llm_test_connection,
+            local_llm_clear_conversation,
             // Other
             respond_to_approval,
             get_last_working_dir,
@@ -542,6 +599,15 @@ pub fn run() {
                 let _ = todo_ref.load().await;
             });
             app.manage(todo_manager);
+
+            // Initialize local LLM manager
+            let local_llm_manager = Arc::new(LocalLlmManager::new());
+            let llm_ref = local_llm_manager.clone();
+            let data_dir_for_llm = data_dir.clone();
+            tauri::async_runtime::spawn(async move {
+                llm_ref.set_data_dir(data_dir_for_llm).await;
+            });
+            app.manage(local_llm_manager);
 
             // Initialize Google Drive client
             let gdrive_client =

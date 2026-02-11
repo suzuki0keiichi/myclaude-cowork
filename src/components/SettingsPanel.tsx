@@ -2,15 +2,171 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
+import type { LocalLlmSettings } from "../types";
 
 export function SettingsPanel() {
   return (
     <div style={styles.container}>
       <div style={styles.content}>
+        <LocalLlmSettingsPanel />
+        <div style={styles.divider} />
         <GDriveSettings />
         <div style={styles.divider} />
         <SlackSettings />
       </div>
+    </div>
+  );
+}
+
+// ── Local LLM (OpenVINO / OpenAI-compatible) ──
+
+function LocalLlmSettingsPanel() {
+  const [settings, setSettings] = useState<LocalLlmSettings>({
+    enabled: false,
+    endpoint: "http://localhost:8000/v1",
+    model: "default",
+    api_key: null,
+    system_prompt: null,
+  });
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const loadSettings = useCallback(async () => {
+    try {
+      const s = await invoke<LocalLlmSettings>("local_llm_get_settings");
+      setSettings(s);
+    } catch (e) {
+      console.error("Failed to load local LLM settings:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
+
+  const save = async () => {
+    setSaving(true);
+    setMessage("");
+    try {
+      await invoke("local_llm_save_settings", { settings });
+      setMessage("保存しました");
+    } catch (e) {
+      setMessage(`エラー: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const testConnection = async () => {
+    setTesting(true);
+    setMessage("");
+    try {
+      // Save first so the backend uses latest settings
+      await invoke("local_llm_save_settings", { settings });
+      const result = await invoke<string>("local_llm_test_connection");
+      setMessage(result);
+    } catch (e) {
+      setMessage(`${e}`);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div style={styles.section}>
+      <h3 style={styles.sectionTitle}>ローカルLLM (OpenVINO対応)</h3>
+      <p style={styles.desc}>
+        OpenVINO Model ServerやOllamaなど、OpenAI互換APIを提供するローカルLLMサーバーと連携します。
+      </p>
+
+      <label style={styles.label}>
+        <input
+          type="checkbox"
+          checked={settings.enabled}
+          onChange={(e) =>
+            setSettings({ ...settings, enabled: e.target.checked })
+          }
+          style={{ marginRight: "6px" }}
+        />
+        ローカルLLMを有効にする
+      </label>
+
+      <label style={styles.label}>APIエンドポイント</label>
+      <input
+        type="text"
+        value={settings.endpoint}
+        onChange={(e) =>
+          setSettings({ ...settings, endpoint: e.target.value })
+        }
+        placeholder="http://localhost:8000/v1"
+        style={styles.input}
+      />
+
+      <label style={styles.label}>モデル名</label>
+      <input
+        type="text"
+        value={settings.model}
+        onChange={(e) =>
+          setSettings({ ...settings, model: e.target.value })
+        }
+        placeholder="default"
+        style={styles.input}
+      />
+
+      <label style={styles.label}>APIキー（任意）</label>
+      <input
+        type="password"
+        value={settings.api_key || ""}
+        onChange={(e) =>
+          setSettings({
+            ...settings,
+            api_key: e.target.value || null,
+          })
+        }
+        placeholder="不要な場合は空欄"
+        style={styles.input}
+      />
+
+      <label style={styles.label}>システムプロンプト（任意）</label>
+      <textarea
+        value={settings.system_prompt || ""}
+        onChange={(e) =>
+          setSettings({
+            ...settings,
+            system_prompt: e.target.value || null,
+          })
+        }
+        placeholder="例: あなたは親切なアシスタントです"
+        rows={3}
+        style={{ ...styles.input, resize: "vertical" as const, fontFamily: "inherit" }}
+      />
+
+      <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+        <button
+          onClick={save}
+          disabled={saving}
+          style={{
+            ...styles.saveButton,
+            opacity: saving ? 0.5 : 1,
+          }}
+        >
+          {saving ? "保存中..." : "保存"}
+        </button>
+        <button
+          onClick={testConnection}
+          disabled={testing}
+          style={{
+            ...styles.authButton,
+            opacity: testing ? 0.6 : 1,
+            background: "var(--text-secondary)",
+          }}
+        >
+          {testing ? "テスト中..." : "接続テスト"}
+        </button>
+      </div>
+
+      {message && <div style={styles.message}>{message}</div>}
     </div>
   );
 }

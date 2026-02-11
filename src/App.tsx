@@ -24,11 +24,13 @@ function App() {
     lastWorkingDir,
     error,
     pendingApproval,
+    inferenceMode,
     sendMessage,
     cancelMessage,
     changeWorkingDir,
     clearMessages,
     respondToApproval,
+    setInferenceMode,
   } = useClaude();
 
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -132,6 +134,14 @@ function App() {
       <main className="chat-main">
         <div className="chat-header">
           <span>チャット</span>
+          <select
+            className="inference-mode-select"
+            value={inferenceMode}
+            onChange={(e) => setInferenceMode(e.target.value as "claude" | "local_llm")}
+          >
+            <option value="claude">Claude Code</option>
+            <option value="local_llm">ローカルLLM</option>
+          </select>
           <span className="chat-header-path" title={workingDir}>
             {workingDir}
           </span>

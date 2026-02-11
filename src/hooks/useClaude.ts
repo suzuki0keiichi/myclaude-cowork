@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import type { ChatMessage, ActivityItem, ApprovalRequest } from "../types";
+import type { ChatMessage, ActivityItem, ApprovalRequest, InferenceMode } from "../types";
 
 export function useClaude() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -13,6 +13,7 @@ export function useClaude() {
   const [lastWorkingDir, setLastWorkingDir] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
+  const [inferenceMode, setInferenceMode] = useState<InferenceMode>("claude");
   const initialLoadDone = useRef(false);
 
   // Restore saved messages and last working dir on mount
@@ -146,13 +147,17 @@ export function useClaude() {
       setStreamingText("");
 
       try {
-        await invoke("send_message", { message });
+        if (inferenceMode === "local_llm") {
+          await invoke("local_llm_send_message", { message });
+        } else {
+          await invoke("send_message", { message });
+        }
       } catch (e) {
         setError(String(e));
         setIsLoading(false);
       }
     },
-    [isLoading]
+    [isLoading, inferenceMode]
   );
 
   const changeWorkingDir = useCallback(async (path: string) => {
@@ -193,6 +198,7 @@ export function useClaude() {
     setStreamingText("");
     invoke("chat_clear_messages").catch(console.error);
     invoke("reset_session").catch(console.error);
+    invoke("local_llm_clear_conversation").catch(console.error);
   }, []);
 
   return {
@@ -204,10 +210,12 @@ export function useClaude() {
     lastWorkingDir,
     error,
     pendingApproval,
+    inferenceMode,
     sendMessage,
     cancelMessage,
     changeWorkingDir,
     clearMessages,
     respondToApproval,
+    setInferenceMode,
   };
 }

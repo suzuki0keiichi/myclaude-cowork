@@ -546,6 +546,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
+ "futures-util",
  "libc",
  "log",
  "regex-lite",
